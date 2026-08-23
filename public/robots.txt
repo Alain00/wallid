@@ -1,18 +1,4 @@
-# Everything, to everyone. This is a public site about an MIT library.
 User-agent: *
 Allow: /
 
-# There is a sitemap now, and the comment here used to argue against having
-# one: it helps a crawler find URLs it would not reach by following links, and
-# there were two pages that linked to each other. Six pages later — with the
-# documentation, the privacy page and two machine-readable files among them —
-# that is no longer the shape of this site.
-#
-# Generated from `manifest.ts` by `sitemap.ts`, so it cannot go stale on the
-# next page added. `/wall` is deliberately absent: it is a development preview
-# against fixture data, not a page anybody should be sent to.
-Sitemap: https://blobatar.dev/sitemap.xml
-
-# Written in prose, for anything that reads rather than crawls.
-# /llms.txt     the library and when to reach for it
-# /openapi.json the avatar endpoint, as OpenAPI 3.1
+Sitemap: https://wallid.lol/sitemap.xml
