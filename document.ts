@@ -67,22 +67,26 @@ const FONTS = `<style>
       }
 
       /*
-        The wall's hand.
+        The hand.
 
-        Declared on every page and downloaded by almost none of them: a browser
-        fetches a face only when something it renders actually matches, and the
-        only thing that matches this is the placement panel's heading — which
-        exists after a click, on one section, on one page. Deliberately *not* in
-        the preload list in \`build.ts\` for the same reason.
+        Every page's heading is set in it, plus the running total in the buy
+        panel, so unlike the other site this borrowed from it is not an
+        after-a-click face — it is above the fold on first paint and belongs in
+        the preload list in \`build.ts\`.
 
-        One weight, not a range: this is instanced at 600 rather than shipped
-        variable, which is a third of the bytes for a face used at exactly one
-        size in exactly one place. And it is subset to the characters in
-        \`src/wall/copy.ts\` and no others — see \`fonts-src/README.md\`.
+        Which is also why it is a *Latin* subset rather than one cut to a single
+        sentence. Six headings that will be reworded is not a charset anybody
+        can keep in step by hand, and the failure mode of getting it wrong is
+        silent: the missing glyphs fall back to whatever cursive the system has,
+        which on most machines is nothing, and then to the sans. That showed up
+        here as a heading whose first two letters were a serif.
+
+        One weight, not a range: instanced at 600, which is a third of the bytes
+        for a face used at exactly one weight everywhere it appears.
       */
       @font-face {
         font-family: "Caveat";
-        src: url("/fonts/caveat-hand.woff2") format("woff2");
+        src: url("/fonts/caveat.woff2") format("woff2");
         font-weight: 600;
         font-display: swap;
       }

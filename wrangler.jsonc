@@ -64,7 +64,7 @@
 		{
 			"binding": "WALLID",
 			"database_name": "wallid",
-			"database_id": "TODO-run-wrangler-d1-create-wallid",
+			"database_id": "472b0659-6867-44eb-997f-4011dedeb548",
 			"migrations_dir": "worker/wall/migrations"
 		}
 	],

@@ -24,6 +24,7 @@ import {
 import { money, quote } from "@/wall/pricing";
 import { createSprites, paint } from "@/wall/paint";
 import { createSource, type Source } from "@/wall/source";
+import { cn } from "@/lib/utils";
 
 /**
  * The wall.
@@ -52,9 +53,18 @@ export type WallProps = {
   onSelect: (rect: Rect, totalCents: number) => void;
   /** The claim just bought, drawn before the server has heard about it. */
   optimistic?: { rect: Rect; claim: ChunkBody["claims"][number]; prices: number[] } | null;
+  /**
+   * Recede, because something in front is being read.
+   *
+   * A scrim rather than a disabled canvas: the wall stays pannable underneath
+   * and dismissing the panel is a click on it. What dimming buys is that the
+   * panel stops competing with several hundred logos for the eye — it can only
+   * win that competition by shouting, and dimming ends it instead.
+   */
+  dim?: boolean;
 };
 
-export function Wall({ onSelect, optimistic }: WallProps) {
+export function Wall({ onSelect, optimistic, dim }: WallProps) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const wrap = useRef<HTMLDivElement>(null);
   const source = useRef<Source>(null as unknown as Source);
@@ -112,14 +122,39 @@ export function Wall({ onSelect, optimistic }: WallProps) {
   useEffect(() => {
     const element = wrap.current;
     if (!element) return;
-    const observer = new ResizeObserver(([entry]) => {
-      const box = entry!.contentRect;
-      setView({ width: box.width, height: box.height });
+
+    /*
+     * The backing store and the CSS size are set together, always.
+     *
+     * A canvas has two sizes and they are not the same property. The `width`
+     * attribute is the pixel buffer; the CSS box is what it is stretched over.
+     * Set only the second and every line is drawn at the wrong scale into a
+     * 300x150 default buffer, which is the classic blurry-canvas bug.
+     */
+    const measure = (width: number, height: number) => {
+      setView({ width, height });
       const dpr = Math.min(devicePixelRatio || 1, 2);
-      if (canvas.current) {
-        canvas.current.width = Math.round(box.width * dpr);
-        canvas.current.height = Math.round(box.height * dpr);
-      }
+      if (!canvas.current) return;
+      canvas.current.width = Math.round(width * dpr);
+      canvas.current.height = Math.round(height * dpr);
+    };
+
+    /*
+     * Measured once here, and then again whenever the box changes.
+     *
+     * The observer is supposed to deliver an initial entry on `observe`, and in
+     * a browser somebody is looking at, it does. It is not guaranteed to have
+     * done so by any particular moment, and when it has not the canvas sits at
+     * zero and paints nothing — a blank wall that looks exactly like a wall
+     * with nothing on it. Measuring up front makes the first frame depend on
+     * layout rather than on a callback's timing.
+     */
+    const box = element.getBoundingClientRect();
+    if (box.width) measure(box.width, box.height);
+
+    const observer = new ResizeObserver(([entry]) => {
+      const next = entry!.contentRect;
+      measure(next.width, next.height);
     });
     observer.observe(element);
     return () => observer.disconnect();
@@ -215,33 +250,68 @@ export function Wall({ onSelect, optimistic }: WallProps) {
         onPointerLeave={() => setHover(null)}
       />
 
-      {/* The price under the cursor, which is the one number that has to be
-          answerable without clicking anything. */}
-      {(live || under) && hover && (
-        <div className="wall-plate pointer-events-none absolute left-1/2 bottom-6 rounded-full border border-line bg-raised/95 px-4 py-2 text-sm backdrop-blur">
+      {/*
+        A scrim between the canvas and whatever is being read over it.
+
+        Three quarters rather than opaque: "you found a nice spot" means nothing
+        if you cannot see what the spot is next to.
+      */}
+      <div
+        aria-hidden="true"
+        className={cn(
+          "bg-ground pointer-events-none absolute inset-0 transition-opacity duration-300",
+          dim ? "opacity-70" : "opacity-0",
+        )}
+      />
+
+      {/*
+        The price of whatever the pointer is on, which is the one number that
+        has to be answerable without clicking anything.
+
+        Bottom centre, floating, in the same pill as every other chip on the
+        page. Keyed by cell so that moving to the next one genuinely remounts it
+        and the entry animation fires again — one price announcing itself per
+        cell. See `.wall-plate` in `styles.css`.
+      */}
+      {(live || under) && hover && !dim && (
+        <div
+          key={`${hover.x},${hover.y}`}
+          className="wall-plate border-line/70 bg-ground/70 pointer-events-none absolute bottom-6 left-1/2 rounded-full border px-5 py-2.5 backdrop-blur"
+        >
           {live ? (
             <>
-              <span className="font-mono">{money(live.totalCents)}</span>
-              <span className="text-muted">
+              <span className="text-ink text-lg">{money(live.totalCents)}</span>
+              <span className="text-muted text-sm">
                 {" "}
                 for {live.cells.length} cell{live.cells.length === 1 ? "" : "s"}
-                {live.takeovers > 0 && ` · ${live.takeovers} taken from someone`}
+                {live.takeovers > 0 && ` · taking ${live.takeovers} from someone`}
               </span>
             </>
           ) : under ? (
             <>
-              <span>{under.claim.label || "hidden"}</span>
-              <span className="text-muted"> · held at {money(under.entry.priceCents)}</span>
+              <span className="text-ink">{under.claim.label || "hidden"}</span>
+              <span className="text-muted text-sm">
+                {" "}
+                · held at {money(under.entry.priceCents)}
+              </span>
             </>
           ) : null}
         </div>
       )}
 
-      <div className="absolute right-4 top-4 flex flex-col gap-1">
-        <ZoomButton label="Zoom in" onClick={() => setCamera(c => ({ ...c, zoom: clampZoom(c.zoom * ZOOM_STEP) }))} disabled={camera.zoom >= MAX_ZOOM}>
+      <div className="absolute top-4 right-4 flex flex-col gap-1.5 sm:top-6 sm:right-6">
+        <ZoomButton
+          label="Zoom in"
+          onClick={() => setCamera(c => ({ ...c, zoom: clampZoom(c.zoom * ZOOM_STEP) }))}
+          disabled={camera.zoom >= MAX_ZOOM}
+        >
           +
         </ZoomButton>
-        <ZoomButton label="Zoom out" onClick={() => setCamera(c => ({ ...c, zoom: clampZoom(c.zoom / ZOOM_STEP) }))} disabled={camera.zoom <= MIN_ZOOM}>
+        <ZoomButton
+          label="Zoom out"
+          onClick={() => setCamera(c => ({ ...c, zoom: clampZoom(c.zoom / ZOOM_STEP) }))}
+          disabled={camera.zoom <= MIN_ZOOM}
+        >
           −
         </ZoomButton>
       </div>
@@ -258,7 +328,11 @@ function ZoomButton({
     <button
       {...props}
       aria-label={label}
-      className="h-9 w-9 rounded-md border border-line bg-raised/90 text-lg leading-none backdrop-blur disabled:opacity-40"
+      className={cn(
+        "border-line/70 bg-ground/70 text-ink/70 size-9 rounded-full border backdrop-blur",
+        "hover:text-ink hover:border-muted text-lg leading-none transition-colors duration-150",
+        "disabled:hover:text-ink/70 disabled:hover:border-line/70 disabled:opacity-40",
+      )}
     >
       {children}
     </button>

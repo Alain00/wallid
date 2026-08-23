@@ -25,13 +25,36 @@ import { SIDE, contains, type Rect } from "./geometry";
  * A wall whose empty cells are invisible is a dark rectangle with some logos
  * floating in it, and there is no way to see that a cell is *available*. The
  * lattice is what makes emptiness read as space for sale.
+ *
+ * Dashed, not solid, and that is the whole difference in how this board feels.
+ * A solid lattice at this density reads as a spreadsheet: an authored, rigid
+ * thing you fill in. A dashed one reads as ruled paper — the cells are still
+ * exactly there, but the wall looks drawn rather than generated, which is the
+ * register the rest of this site is in. It also costs the grid about half its
+ * ink, so the logos people pay for are unambiguously the loudest thing on
+ * screen.
  */
-const GRID = "rgba(255,255,255,0.055)";
+const GRID = "rgba(255,255,255,0.09)";
 const GROUND = "#0a0a0b";
+
+/**
+ * The dash, in screen pixels, and re-derived per frame rather than fixed.
+ *
+ * A dash measured in *cells* stretches as you zoom and the texture changes with
+ * the camera, which makes the wall feel like it is breathing. Measured in
+ * screen pixels it stays the same stroke at every zoom, so zooming moves the
+ * wall rather than redrawing it in a different hand.
+ */
+const DASH = [3, 5];
 
 /** The wall's own edge. Bounded is the product, so the boundary is drawn rather
  * than merely enforced: you should be able to see that the board ends. */
-const EDGE = "rgba(255,255,255,0.22)";
+const EDGE = "rgba(255,255,255,0.28)";
+
+/** How round a claim's tile is, as a fraction of the cell. Small: this is a
+ * softened square, not a pill, and the artwork inside it is usually already a
+ * rounded mark. */
+const RADIUS = 0.14;
 
 /**
  * Loaded artwork, keyed by its R2 key.
@@ -131,12 +154,16 @@ function drawGrid(
   box: { x0: number; y0: number; x1: number; y1: number },
   size: number,
 ) {
-  // Below about six pixels a cell the lines are closer together than they are
-  // wide, and the grid stops reading as a grid and starts reading as fog.
-  if (size < 6) return;
+  // Below about ten pixels a cell the dashes are closer together than the gaps
+  // between them, and the grid stops reading as a lattice and starts reading as
+  // fog. Higher than the solid version's threshold, because a dashed line
+  // degrades sooner than a solid one does.
+  if (size < 10) return;
 
+  ctx.save();
   ctx.strokeStyle = GRID;
   ctx.lineWidth = 1;
+  ctx.setLineDash(DASH);
   ctx.beginPath();
   const x0 = Math.max(0, box.x0);
   const y0 = Math.max(0, box.y0);
@@ -156,6 +183,23 @@ function drawGrid(
     ctx.lineTo(Math.round(cellToScreen(camera, view, x1, y).x) + 0.5, Math.round(at.y) + 0.5);
   }
   ctx.stroke();
+  ctx.restore();
+}
+
+/** A rounded rectangle path, in the one place that needs to agree about the
+ * corner radius. `roundRect` is on every browser this ships to. */
+function rounded(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  r: number,
+) {
+  ctx.beginPath();
+  // A radius larger than half the shorter side inverts the corner, which
+  // happens at the small end of the zoom range on a 1x1 claim.
+  ctx.roundRect(x, y, w, h, Math.min(r, w / 2, h / 2));
 }
 
 function drawClaim(
@@ -187,9 +231,20 @@ function drawClaim(
    * necessarily a rectangle at all. That is the point.
    */
   ctx.beginPath();
+  const radius = size * RADIUS;
   for (const cell of cells) {
     const at = cellToScreen(camera, view, cell.x, cell.y);
-    ctx.rect(at.x, at.y, size + 1, size + 1);
+    /*
+     * Each surviving cell is its own rounded square, with a hairline of inset
+     * so neighbours do not fuse into one slab.
+     *
+     * Which means a 4x4 claim reads as sixteen soft tiles sharing one image
+     * rather than as a single hard rectangle — and when four of them are taken
+     * out of the middle, the hole has the same soft edge as the outside did.
+     * There is no separate code path for a partially-eaten claim; there is just
+     * a shorter list of cells to clip to.
+     */
+    ctx.roundRect(at.x + 0.5, at.y + 0.5, size - 1, size - 1, Math.min(radius, (size - 1) / 2));
   }
   ctx.clip();
 
@@ -208,7 +263,17 @@ function drawClaim(
     ctx.fillStyle = groundFor(claim.id);
     ctx.fillRect(corner.x, corner.y, width, height);
 
-    const scale = Math.min(width / sprite.naturalWidth, height / sprite.naturalHeight);
+    /*
+     * Inset, so the artwork does not run to the edge of its own tile.
+     *
+     * A logo touching the rounded corner reads as cropped. An eighth of a cell
+     * of breathing room on every side is what makes it read as *placed on* the
+     * tile, which is the same reason the hero blobatar on the other site sits
+     * inside its box rather than filling it.
+     */
+    const pad = size * 0.12;
+    const inner = { w: Math.max(1, width - pad * 2), h: Math.max(1, height - pad * 2) };
+    const scale = Math.min(inner.w / sprite.naturalWidth, inner.h / sprite.naturalHeight);
     const w = sprite.naturalWidth * scale;
     const h = sprite.naturalHeight * scale;
     // A favicon is 32px being drawn at up to 160, so the browser's smoothing is
@@ -229,8 +294,27 @@ function drawClaim(
     ctx.fillRect(corner.x, corner.y, width, height);
 
     if (claim.label && size > 24) {
+      /*
+       * The label is clipped to the cells *without* their gutters.
+       *
+       * The tile clip insets every cell by half a pixel so neighbours read as
+       * separate tiles, and a word drawn through that clip is sliced by every
+       * gutter it crosses — legible as "se d1" rather than as "seed1", which is
+       * how this was found. Re-clipping to the same cells at full bleed closes
+       * the gaps for the text alone, and still refuses to draw it over a hole
+       * where cells have been taken away.
+       */
+      ctx.restore();
+      ctx.save();
+      ctx.beginPath();
+      for (const cell of cells) {
+        const at = cellToScreen(camera, view, cell.x, cell.y);
+        ctx.rect(at.x, at.y, size + 1, size + 1);
+      }
+      ctx.clip();
+
       ctx.fillStyle = "rgba(250,250,248,0.82)";
-      ctx.font = `600 ${Math.min(size * 0.28, 18)}px Geist, system-ui, sans-serif`;
+      ctx.font = `500 ${Math.min(size * 0.26, 17)}px Geist, ui-sans-serif, system-ui, sans-serif`;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.fillText(claim.label.slice(0, 14), corner.x + width / 2, corner.y + height / 2, width - 8);
@@ -254,9 +338,34 @@ function drawClaim(
  * colour competing with it.
  */
 function groundFor(id: string): string {
-  let hash = 0;
-  for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) | 0;
-  return `oklch(0.28 0.045 ${Math.abs(hash) % 360})`;
+  /*
+   * FNV-1a with a final avalanche, not `hash * 31 + c`.
+   *
+   * The textbook string hash has almost no avalanche in its low bits, and the
+   * hue is taken from exactly those. Claim ids share a timestamp prefix and
+   * differ in their tail, so with `* 31` every claim minted in the same second
+   * landed within a few degrees of every other one and the wall came out
+   * monochrome — which was visible the first time more than one claim was on
+   * screen together.
+   */
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < id.length; i++) {
+    hash ^= id.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  hash ^= hash >>> 16;
+  hash = Math.imul(hash, 0x7feb352d);
+  hash ^= hash >>> 15;
+
+  const hue = (hash >>> 0) % 360;
+  /*
+   * Chroma varies a little with the hue, because a fixed chroma is not a fixed
+   * *apparent* saturation: at oklch's yellows a given chroma reads far more
+   * vivid than at its blues. A small counter-tilt keeps every tile looking
+   * equally recessive, which is the point of deriving the colour at all.
+   */
+  const chroma = 0.04 + 0.014 * Math.cos(((hue - 250) * Math.PI) / 180);
+  return `oklch(0.29 ${chroma.toFixed(3)} ${hue})`;
 }
 
 function drawHover(
@@ -267,8 +376,9 @@ function drawHover(
   cell: { x: number; y: number },
 ) {
   const at = cellToScreen(camera, view, cell.x, cell.y);
-  ctx.fillStyle = "rgba(250,250,248,0.09)";
-  ctx.fillRect(at.x, at.y, size, size);
+  ctx.fillStyle = "rgba(250,250,248,0.07)";
+  rounded(ctx, at.x + 0.5, at.y + 0.5, size - 1, size - 1, size * RADIUS);
+  ctx.fill();
 }
 
 /**
@@ -290,11 +400,23 @@ function drawSelection(
   const h = rect.h * size;
 
   ctx.save();
-  ctx.fillStyle = "rgba(250,250,248,0.10)";
-  ctx.fillRect(at.x, at.y, w, h);
-  ctx.strokeStyle = "#fafaf8";
-  ctx.lineWidth = 2;
-  ctx.strokeRect(at.x + 1, at.y + 1, w - 2, h - 2);
+  ctx.fillStyle = "rgba(250,250,248,0.08)";
+  rounded(ctx, at.x, at.y, w, h, size * RADIUS);
+  ctx.fill();
+
+  /*
+   * Dashed, in the same hand as the grid but at full strength.
+   *
+   * A solid marquee over a dashed lattice looks like a different tool arrived;
+   * a longer dash at the same angle reads as the same pencil pressing harder.
+   * The dash is longer than the grid's so the two are still distinguishable
+   * where the selection sits directly on a gridline.
+   */
+  ctx.strokeStyle = "rgba(250,250,248,0.92)";
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([6, 4]);
+  rounded(ctx, at.x + 1, at.y + 1, w - 2, h - 2, size * RADIUS);
+  ctx.stroke();
   ctx.restore();
 }
 
@@ -307,9 +429,16 @@ function drawEdge(
   size: number,
 ) {
   const at = cellToScreen(camera, view, 0, 0);
+  ctx.save();
   ctx.strokeStyle = EDGE;
-  ctx.lineWidth = 2;
-  ctx.strokeRect(at.x, at.y, SIDE * size, SIDE * size);
+  ctx.lineWidth = 1.5;
+  // The longest dash on the wall. The boundary is the one line that should read
+  // as deliberate rather than as texture, and length is how a dashed stroke
+  // says that without going solid.
+  ctx.setLineDash([10, 6]);
+  rounded(ctx, at.x, at.y, SIDE * size, SIDE * size, Math.min(size * RADIUS * 2, 14));
+  ctx.stroke();
+  ctx.restore();
 }
 
 /** Is this cell inside the dragged rectangle? Re-exported so the panel and the

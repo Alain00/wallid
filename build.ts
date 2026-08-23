@@ -216,7 +216,11 @@ async function finish(
    */
   html = html.replace(
     "</head>",
-    ["geist-variable", "geist-mono-variable"]
+    // `caveat` is in the list because every page's heading is set in it, above
+    // the fold. Preloading a face nothing renders would be a wasted download;
+    // preloading this one is the difference between the heading arriving with
+    // the page and arriving a beat after it.
+    ["geist-variable", "geist-mono-variable", "caveat"]
       .map(
         f =>
           `<link rel="preload" href="/fonts/${f}.woff2" as="font" type="font/woff2" crossorigin>`,
