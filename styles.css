@@ -1,0 +1,221 @@
+/*
+ * `source(none)` turns off Tailwind's automatic content detection and the
+ * `@source` lines below opt directories back in explicitly.
+ *
+ * Automatic detection walks up from this file, and in a workspace that means it
+ * finds the hoisted `node_modules` at the repo root. The result still compiles
+ * correctly — it just emits every utility those packages appear to mention,
+ * which took this stylesheet from ~30 KB to ~208 KB of mostly-unused rules.
+ */
+@import "tailwindcss" source(none);
+
+@source "./src";
+/* Every page entry, by directory rather than by file. One stylesheet serves all
+   of them — the build inlines it into each document — so a class only one page
+   uses has to be scanned for here or it never gets compiled, and naming the
+   directory means adding a page cannot forget to.
+
+   The documents themselves are not scanned: they are generated from
+   `manifest.ts` and carry no utility classes, only metadata. */
+@source "./pages";
+@source "./mount.tsx";
+
+/*
+ * Self-hosted rather than pulled from a CDN: the page is meant to be genuinely
+ * static, and a third-party font host is both a network dependency and a FOUT
+ * we do not control. One variable file per family covers every weight the page
+ * uses, which is cheaper than the six static cuts it would otherwise take.
+ *
+ * Absolute `/fonts/...` rather than a relative path, deliberately. Bun's CSS
+ * bundler inlines any `url()` it can resolve on disk as a base64 data URI —
+ * ~188 KB of font buried inside the stylesheet, render-blocking and re-fetched
+ * whenever a single class changes. The `loader` option does not override that.
+ * An absolute URL is not resolvable as a module, so it passes through untouched
+ * and the files are copied as static assets instead.
+ */
+@theme {
+  --font-sans: "Geist", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, monospace;
+
+  /*
+   * The one hand-lettered voice, used for headings and the wordmark. Subset to
+   * the characters those actually use, so the fallback matters: anything set in
+   * it beyond that falls through to whatever cursive the system has, which on
+   * most machines is nothing, and then to the sans.
+   */
+  --font-hand: "Caveat", "Segoe Print", cursive;
+
+  /*
+   * Near-black rather than #000. The wall's grid is drawn as low-alpha white on
+   * this ground, and against true black a 5% line is either invisible or
+   * banding; against #0A0A0B it reads as a lattice.
+   */
+  --color-ground: #0a0a0b;
+  --color-raised: #131315;
+  --color-ink: #fafaf8;
+  --color-muted: #8a8a93;
+  --color-line: #232327;
+
+  /*
+   * One token, not a theme. The page is monochrome by design: the logos people
+   * buy are the only saturated thing on it, and every colour this stylesheet
+   * adds is a colour competing with somebody's brand.
+   */
+  --color-warn: oklch(0.72 0.16 25);
+}
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  html {
+    scroll-behavior: auto;
+    background-color: var(--color-ground);
+  }
+
+  body {
+    @apply bg-ground text-ink font-sans antialiased;
+  }
+
+  ::selection {
+    background: var(--color-ink);
+    color: var(--color-ground);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-ink);
+    outline-offset: 3px;
+  }
+}
+
+/*
+ * The tuning popover.
+ *
+ * Keyed on Radix's `data-state` rather than on mount, because Radix keeps the
+ * element in the tree for the duration of the exit animation — that is the
+ * whole reason the closed state has keyframes at all.
+ */
+@layer components {
+  .popover-panel {
+    transform-origin: var(--radix-popover-content-transform-origin);
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .popover-panel[data-state="open"] {
+      animation: popover-in 160ms cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    .popover-panel[data-state="closed"] {
+      animation: popover-out 110ms ease-in;
+    }
+  }
+
+  @keyframes popover-in {
+    from {
+      opacity: 0;
+      transform: scale(0.96) translateY(-2px);
+    }
+  }
+
+  @keyframes popover-out {
+    to {
+      opacity: 0;
+      transform: scale(0.97);
+    }
+  }
+}
+
+@layer components {
+  /*
+   * The price of what the pointer is on.
+   *
+   * It exists for a fraction of a second at a time and it is the only thing
+   * that says what a cell costs without a click, so it has to arrive fast
+   * enough not to be waited for. 140ms is inside the tooltip band; the
+   * curve is a strong ease-out, because the moment the eye is watching most
+   * closely is the first frame and an ease-in would spend it standing still.
+   *
+   * `@starting-style` rather than a mounted flag: the element is keyed by its
+   * cell, so moving to the next cell genuinely remounts it and the entry fires
+   * again — which is the behaviour wanted, one name announcing itself per cell.
+   *
+   * There is no exit. The node is gone the moment the pointer moves on, and a
+   * label fading out of a cell the pointer has already left is a ghost of an
+   * answer to a question nobody is asking any more.
+   */
+  .wall-plate {
+    /*
+     * Both the centring and the entry ride one property, and that is not a
+     * style choice — it is what survives the build.
+     *
+     * The obvious split (centre on `translate`, animate `transform`) reads
+     * correctly and compiles away: Lightning CSS lowers standalone `translate`
+     * into `transform` for the browser targets, so a `transform` declared
+     * afterwards in the same rule silently eliminates it. The compiled
+     * stylesheet had no -50% in it at all.
+     *
+     * The Tailwind utility is gone from the element for the mirror-image
+     * reason: with it there, two sources both claimed the horizontal half-width
+     * and the label moved a whole one.
+     */
+    opacity: 1;
+    transform: translate(-50%, 0);
+    transition:
+      opacity 140ms cubic-bezier(0.23, 1, 0.32, 1),
+      transform 140ms cubic-bezier(0.23, 1, 0.32, 1);
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    @starting-style {
+      .wall-plate {
+        opacity: 0;
+        /* Half of the gap it sits in. Any further and it reads as sliding in
+           from somewhere else rather than as settling under the cursor. The
+           -50% is carried along because this replaces the whole transform. */
+        transform: translate(-50%, -3px);
+      }
+    }
+  }
+
+  /* Motion off: the name still has to appear, it simply must not travel. */
+  @media (prefers-reduced-motion: reduce) {
+    @starting-style {
+      .wall-plate {
+        opacity: 0;
+      }
+    }
+  }
+}
+
+/*
+ * Below-the-fold sections.
+ *
+ * `content-visibility: auto` lets the browser skip style, layout and paint for
+ * a subtree until it is close to the viewport. It exists here because the page
+ * is prerendered: every word of these sections is in the HTML, which is what we
+ * want for anything reading the page without running it, but it also means the
+ * browser has a full second and third screen of markup to lay out before it can
+ * paint the first one. This defers that work without deferring the content.
+ *
+ * `contain-intrinsic-size` is the half people leave off and then wonder why the
+ * scrollbar jumps: a skipped subtree measures zero without it, so the page
+ * collapses to the height of the hero and re-expands as you scroll into each
+ * section. The values are placeholders for the real heights, close enough that
+ * the scrollbar does not visibly resettle. `auto` in front means "remember the
+ * real size once you have measured it", so it self-corrects after first scroll.
+ *
+ * Applied only below the fold, and that restriction matters: above it this
+ * would be a pure loss, deferring work that has to happen before first paint
+ * anyway.
+ *
+ * Not on the wall, either: it is a canvas sized by a `ResizeObserver`, and a
+ * subtree the browser is skipping has no box for that to observe. The wall pays
+ * nothing at first paint regardless, since it draws only after mount.
+ */
+@layer components {
+  .defer-offscreen {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 100vh;
+  }
+}

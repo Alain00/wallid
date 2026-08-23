@@ -1,0 +1,109 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "wallid",
+	"main": "worker/index.ts",
+	"compatibility_date": "2026-08-17",
+	// No `nodejs_compat`. The Worker talks to Stripe over `fetch` and verifies
+	// webhook signatures with WebCrypto (see `worker/wall/stripe.ts`), precisely
+	// so this flag can stay off: leaving it off keeps startup minimal and makes
+	// an accidental Node import fail at build time rather than in production —
+	// which for a Worker that settles payments is the difference worth paying
+	// for over the convenience of the Stripe SDK.
+	/*
+   * The static site, served by Cloudflare's asset pipeline rather than by the
+   * Worker.
+   *
+   * That distinction is the economics of this whole arrangement: asset requests
+   * are free and unmetered, Worker requests are billed. `run_worker_first`
+   * scopes the Worker to the two prefixes that genuinely need it, so a visitor
+   * reading the rules costs nothing.
+   *
+   * `auto-trailing-slash` resolves `/rules` to `rules.html`, so a link somebody
+   * shared keeps working.
+   *
+   * `not_found_handling` is `404-page`, not an SPA fallback, and the difference
+   * is the status code. A fallback would answer every typo'd URL with the wall
+   * and a 200, which tells a crawler that every path on this domain exists;
+   * `404-page` serves `dist/404.html` with a real 404.
+   */
+	"assets": {
+		"directory": "./dist",
+		"binding": "ASSETS",
+		"html_handling": "auto-trailing-slash",
+		"not_found_handling": "404-page",
+		/*
+     * What the Worker must see.
+     *
+     * `/wall/*` is the board: the index, the chunk bodies, quotes, checkout and
+     * the Stripe webhook. `/img/*` is the artwork, which is R2 rather than a
+     * built asset and therefore cannot come off the asset pipeline.
+     *
+     * Both are billed, and what pays for them is in the responses. A chunk
+     * body's URL contains its version and the body is `immutable` for a year,
+     * so a client fetches any given body at most once, ever; an artwork key is
+     * a hash of its own bytes, so the same is true there by construction. The
+     * only repeated request is a sixteen-entry index with a thirty-second TTL.
+     */
+		"run_worker_first": [
+			"/wall/*",
+			"/img/*"
+		]
+	},
+	/*
+   * Storage: one D1 database for the wall, one R2 bucket for the artwork.
+   *
+   * `database_id` is this account's and is not a secret; `wrangler d1 create
+   * wallid` is what produces it, and it is the one step in this project that
+   * cannot be done from the repo. See the README.
+   *
+   * Migrations live beside the queries they create tables for rather than in a
+   * top-level `migrations/`, because the whole of the wall's server side is one
+   * directory.
+   */
+	"d1_databases": [
+		{
+			"binding": "WALLID",
+			"database_name": "wallid",
+			"database_id": "TODO-run-wrangler-d1-create-wallid",
+			"migrations_dir": "worker/wall/migrations"
+		}
+	],
+	/*
+   * The artwork bucket.
+   *
+   * R2 rather than D1 blobs or the asset pipeline: these are files strangers
+   * upload after the build has already happened, so an asset directory cannot
+   * hold them, and a few hundred KB per row is not what a D1 read budget is
+   * for. Keys are content hashes, which is what makes every object here
+   * immutable and deduplicated without any bookkeeping.
+   */
+	"r2_buckets": [
+		{
+			"binding": "ART",
+			"bucket_name": "wallid-artwork"
+		}
+	],
+	/*
+   * Both hostnames, as custom domains. `custom_domain: true` makes Wrangler own
+   * the DNS record and the route together.
+   *
+   * The apex must 308-redirect to itself rather than to `www` or the other way
+   * round; Cloudflare will not do that on its own, so a Redirect Rule has to
+   * reproduce it. The alternative is two hostnames serving identical content,
+   * which is a duplicate-content problem and splits every cache in the path.
+   * `origin.ts` names the apex as canonical, so `www` is the one that redirects.
+   */
+	"routes": [
+		{
+			"pattern": "wallid.lol",
+			"custom_domain": true
+		},
+		{
+			"pattern": "www.wallid.lol",
+			"custom_domain": true
+		}
+	],
+	"observability": {
+		"enabled": true
+	}
+}

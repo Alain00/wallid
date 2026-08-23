@@ -1,0 +1,8 @@
+node_modules
+dist
+.wrangler
+.dev.vars
+*.html
+!public/**/*.html
+public/sitemap.xml
+favicon.svg

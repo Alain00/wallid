@@ -1,0 +1,23 @@
+# Copy to `.dev.vars`. Wrangler reads that file; it is gitignored, and it is not
+# an `.env` — these are Worker secrets, and the two should not be one file.
+# See `docs/adr/0002-commercial-config-stays-out-of-the-repo.md`.
+
+# Pepper for the identity hashes. Any long random string; changing it orphans
+# every existing owner token.
+WALL_SECRET="a-development-pepper"
+
+# Cloudflare Turnstile. The values below are Cloudflare's published test pair,
+# which accepts any token — a clone with no real keys still gets a working wall.
+TURNSTILE_SECRET="1x0000000000000000000000000000000AA"
+
+# Stripe. Test keys from the dashboard; the webhook secret comes out of
+# `stripe listen --forward-to localhost:3000/api/stripe/webhook`.
+STRIPE_SECRET_KEY=""
+STRIPE_WEBHOOK_SECRET=""
+
+# Bearer token for the moderation endpoints.
+WALL_ADMIN_TOKEN="development"
+
+# Comma-separated. Not in the repo: a blocklist in a public repo is a word list
+# for anyone who wants to find what is not blocked.
+WALL_BLOCKLIST=""
