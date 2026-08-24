@@ -61,11 +61,40 @@ bun run typecheck
 bun run build
 ```
 
+## Deploy your own
+
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/Alain00/wallid)
+
+Forks this repo into your account, provisions the D1 database and the R2 bucket
+and writes their new ids into your copy of `wrangler.jsonc`, wires up Workers
+Builds, and deploys. What you get is a real, empty wall of 16,384 cells on
+`wallid.<your-subdomain>.workers.dev`, and everything on it that does not
+involve money works immediately.
+
+Money and the human check do not, and neither fails loudly:
+
+- **Stripe.** The button prompts for the values in `.dev.vars.example` and sets
+  them as Worker secrets. Leave `STRIPE_SECRET_KEY` empty and `/wall/checkout`
+  refuses with "payments are not configured", which is the honest state — it is
+  not pretending. Fill it in later with `wrangler secret put`.
+- **Turnstile is the one that will catch you.** `BUN_PUBLIC_TURNSTILE_SITE_KEY`
+  is compiled into the client bundle at *build* time, and Workers Builds keeps
+  build variables somewhere different from runtime secrets — so setting it as a
+  secret does nothing. Add it under **Settings → Build → Variables** on the new
+  Worker and redeploy, or the widget runs on Cloudflare's test key while your
+  Worker verifies against the real secret, and every write is refused with
+  "could not verify you are human" and nothing anywhere says why.
+
+Then `./scripts/prod-setup.sh` from a clone of your new repo, which is the same
+ten stages below and skips what the button already did.
+
 ## First deploy
 
 ```sh
 ./scripts/prod-setup.sh
 ```
+
+This is the path for a wall on a domain you own, rather than on `workers.dev`.
 
 Ten stages: the Cloudflare account, D1, R2, Turnstile, the wall's own secrets,
 the Stripe live key, the deploy, the Stripe webhook, the www redirect, and a
@@ -89,12 +118,19 @@ CNAME record — so those come off first or the deploy fails on a route conflict
 at it; Cloudflare will not do that on its own, and two hostnames serving
 identical content splits every cache in the path.
 
+The two hostnames live under `env.production` in `wrangler.jsonc` rather than at
+the top level, which is why `bun run deploy` is `wrangler deploy --env
+production`. Nothing at the top level claims a domain — that is what lets the
+Deploy button above work in an account that has never heard of `wallid.lol`.
+The environment sets `name` back to `wallid`, so it is the same Worker and the
+same secrets, not a second copy of the wall.
+
 To swap Stripe between test and live afterwards is two commands and no redeploy,
 since secrets apply to the running Worker immediately:
 
 ```sh
-bunx wrangler secret put STRIPE_SECRET_KEY
-bunx wrangler secret put STRIPE_WEBHOOK_SECRET
+bunx wrangler secret put STRIPE_SECRET_KEY --env production
+bunx wrangler secret put STRIPE_WEBHOOK_SECRET --env production
 ```
 
 Then, in Stripe: add `https://wallid.lol/wall/webhook` as an endpoint listening

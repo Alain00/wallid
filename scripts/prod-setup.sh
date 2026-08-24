@@ -204,13 +204,17 @@ WORKER_SECRETS=()
 
 # put_secret NAME VALUE — a Cloudflare Worker secret, via stdin so the value
 # never appears in a process list or a shell history.
+#
+# `--env production` names the same Worker the deploy does. It is not a second
+# copy: `wrangler.jsonc` sets `name` to `wallid` inside that environment too, so
+# the flag only silences the warning wrangler prints once environments exist.
 put_secret() {
   local name="$1" value="$2"
-  if printf '%s' "$value" | bunx wrangler secret put "$name" >/dev/null 2>&1; then
+  if printf '%s' "$value" | bunx wrangler secret put "$name" --env production >/dev/null 2>&1; then
     WORKER_SECRETS+=("$name")
     printf '  %s✓ set%s Worker secret %s\n' "$GREEN" "$RESET" "$name"
   else
-    SKIPPED+=("Worker secret $name — run: bunx wrangler secret put $name")
+    SKIPPED+=("Worker secret $name — run: bunx wrangler secret put $name --env production")
     warn "could not set $name — is wrangler logged in?"
   fi
 }
@@ -340,7 +344,7 @@ ask_secret WALL_BLOCKLIST "Blocklist (or Enter to skip):"
 if [[ -n "$WALL_BLOCKLIST" ]]; then
   put_secret WALL_BLOCKLIST "$WALL_BLOCKLIST"
 else
-  SKIPPED+=("WALL_BLOCKLIST — bunx wrangler secret put WALL_BLOCKLIST")
+  SKIPPED+=("WALL_BLOCKLIST — bunx wrangler secret put WALL_BLOCKLIST --env production")
 fi
 pause
 
@@ -371,7 +375,7 @@ if confirm "Set up the visitor count now?"; then
   ask_secret PULSE_READ_TOKEN "Paste the analytics READ token:"
   put_secret PULSE_READ_TOKEN "$PULSE_READ_TOKEN"
 else
-  SKIPPED+=("the visitor count — bunx wrangler secret put PULSE_ACCOUNT_ID, then PULSE_READ_TOKEN")
+  SKIPPED+=("the visitor count — bunx wrangler secret put PULSE_ACCOUNT_ID --env production, then PULSE_READ_TOKEN")
 fi
 pause
 
@@ -511,8 +515,8 @@ finish
 (( ${#WORKER_SECRETS[@]} )) && note "set ${#WORKER_SECRETS[@]} Worker secret(s): ${WORKER_SECRETS[*]}"
 printf '\n'
 note "To swap Stripe modes later, two commands and no redeploy:"
-note "  bunx wrangler secret put STRIPE_SECRET_KEY"
-note "  bunx wrangler secret put STRIPE_WEBHOOK_SECRET"
+note "  bunx wrangler secret put STRIPE_SECRET_KEY --env production"
+note "  bunx wrangler secret put STRIPE_WEBHOOK_SECRET --env production"
 printf '\n'
 note "$ENV_FILE holds the public build-time key. It is needed by every future"
 note "'bun run deploy' — a machine without it ships a wall nobody can buy from."

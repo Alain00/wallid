@@ -30,9 +30,9 @@ WALL_BLOCKLIST=""
 #
 # `PULSE_READ_TOKEN` is an account token with `Account Analytics: Read`, made at
 # https://dash.cloudflare.com/profile/api-tokens. In production it is a Worker
-# secret (`bunx wrangler secret put PULSE_READ_TOKEN`) and never a var in
-# `wrangler.jsonc`: it can read every Analytics Engine dataset on the account,
-# and that file is in the repo.
+# secret (`bunx wrangler secret put PULSE_READ_TOKEN --env production`) and
+# never a var in `wrangler.jsonc`: it can read every Analytics Engine dataset
+# on the account, and that file is in the repo.
 #
 # Both blank is the supported state. `/wall/pulse` then answers `{"here":null}`
 # and the chip does not render — which is also what local development looks

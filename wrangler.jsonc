@@ -84,26 +84,6 @@
 		}
 	],
 	/*
-   * Both hostnames, as custom domains. `custom_domain: true` makes Wrangler own
-   * the DNS record and the route together.
-   *
-   * The apex must 308-redirect to itself rather than to `www` or the other way
-   * round; Cloudflare will not do that on its own, so a Redirect Rule has to
-   * reproduce it. The alternative is two hostnames serving identical content,
-   * which is a duplicate-content problem and splits every cache in the path.
-   * `origin.ts` names the apex as canonical, so `www` is the one that redirects.
-   */
-	"routes": [
-		{
-			"pattern": "wallid.lol",
-			"custom_domain": true
-		},
-		{
-			"pattern": "www.wallid.lol",
-			"custom_domain": true
-		}
-	],
-	/*
    * How many people are here, and how many came in the last hour.
    *
    * Analytics Engine rather than a third-party beacon, because the wall already
@@ -132,6 +112,71 @@
 	 */
 	"triggers": {
 		"crons": ["0 * * * *"]
+	},
+
+	/*
+   * The hostnames, held one environment down.
+   *
+   * Nothing at the top level claims a domain, and that is what makes this repo
+   * deployable by somebody else: a fork has no `wallid.lol` in its account, and
+   * a `routes` entry for a zone you do not own fails the deploy outright rather
+   * than being skipped. With the top level route-free, a clone lands on
+   * `wallid.<subdomain>.workers.dev` and works — see the Deploy button in the
+   * README.
+   *
+   * `name` is repeated here on purpose. A named environment otherwise deploys
+   * as `<name>-<environment>`, and `wallid-production` would be a *different*
+   * Worker: new secrets, new cron, and the custom domains moved off the old
+   * one. Naming it `wallid` again keeps `--env production` pointed at exactly
+   * the Worker that is already serving the wall, and leaves the environment as
+   * what it is here — a place to put two routes.
+   *
+   * The bindings below are repeated because they have to be: bindings are
+   * non-inheritable, so an environment that does not restate them deploys a
+   * Worker with no database, no bucket and no dataset. They are the same three
+   * as above, deliberately — there is one wall, and production is not a
+   * separate copy of it.
+   *
+   * The apex must 308-redirect to itself rather than to `www` or the other way
+   * round; Cloudflare will not do that on its own, so a Redirect Rule has to
+   * reproduce it. The alternative is two hostnames serving identical content,
+   * which is a duplicate-content problem and splits every cache in the path.
+   * `origin.ts` names the apex as canonical, so `www` is the one that redirects.
+   */
+	"env": {
+		"production": {
+			"name": "wallid",
+			"routes": [
+				{
+					"pattern": "wallid.lol",
+					"custom_domain": true
+				},
+				{
+					"pattern": "www.wallid.lol",
+					"custom_domain": true
+				}
+			],
+			"d1_databases": [
+				{
+					"binding": "WALLID",
+					"database_name": "wallid",
+					"database_id": "37888103-d9ed-4429-860b-7dd75a323e50",
+					"migrations_dir": "worker/wall/migrations"
+				}
+			],
+			"r2_buckets": [
+				{
+					"binding": "ART",
+					"bucket_name": "wallid-artwork"
+				}
+			],
+			"analytics_engine_datasets": [
+				{
+					"binding": "PULSE",
+					"dataset": "wallid_pulse"
+				}
+			]
+		}
 	},
 
 	"observability": {
