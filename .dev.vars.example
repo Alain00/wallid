@@ -1,6 +1,8 @@
 # Copy to `.dev.vars`. Wrangler reads that file; it is gitignored, and it is not
 # an `.env` — these are Worker secrets, and the two should not be one file.
-# See `docs/adr/0002-commercial-config-stays-out-of-the-repo.md`.
+# Everything here is read at request time by the Worker; `.env` is read at
+# build time by Bun and compiled into the client bundle. Nothing secret goes
+# there.
 
 # Pepper for the identity hashes. Any long random string; changing it orphans
 # every existing owner token.
@@ -21,3 +23,19 @@ WALL_ADMIN_TOKEN="development"
 # Comma-separated. Not in the repo: a blocklist in a public repo is a word list
 # for anyone who wants to find what is not blocked.
 WALL_BLOCKLIST=""
+
+# The live visitor count on the wall — the chip that says how many people are
+# here. Reading Analytics Engine is an HTTP API rather than a binding, so it
+# wants an account token even though writing does not.
+#
+# `PULSE_READ_TOKEN` is an account token with `Account Analytics: Read`, made at
+# https://dash.cloudflare.com/profile/api-tokens. In production it is a Worker
+# secret (`bunx wrangler secret put PULSE_READ_TOKEN`) and never a var in
+# `wrangler.jsonc`: it can read every Analytics Engine dataset on the account,
+# and that file is in the repo.
+#
+# Both blank is the supported state. `/wall/pulse` then answers `{"here":null}`
+# and the chip does not render — which is also what local development looks
+# like, since nothing is writing a dataset there anyway.
+PULSE_ACCOUNT_ID=""
+PULSE_READ_TOKEN=""
