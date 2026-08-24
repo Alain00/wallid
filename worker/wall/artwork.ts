@@ -10,17 +10,43 @@
  * when the favicon turns out to be a 16px blur.
  */
 
-/** What a claim's artwork may be, in bytes. 256 KB is generous for a logo and
- * mean for anything trying to use this wall as image hosting. */
-export const MAX_BYTES = 256 * 1024;
+/** What a claim's artwork may be, in bytes. Shared with the browser that has to
+ * encode under it; see `src/wall/limits.ts`. */
+export { MAX_BYTES } from "../../src/wall/limits";
+
+import { MAX_BYTES } from "../../src/wall/limits";
+
+/**
+ * What may be *fetched* from a buyer's site, which is not the same number.
+ *
+ * A favicon is a few KB and a social preview is a 1200x630 photograph, so the
+ * storage limit would refuse the og:image path outright — and refusing it for
+ * being big is refusing it for being what it is. Anything over `MAX_BYTES`
+ * comes back oversized and goes to the browser to be redrawn at tile size, the
+ * same round trip an SVG takes; only the result of that is stored. So the
+ * bucket's limit is untouched, and this one only bounds what a stranger's
+ * server can make this Worker hold for a moment.
+ */
+export const MAX_FETCH_BYTES = 1024 * 1024;
 
 /**
  * The types accepted, and the two that are missing.
  *
  * No SVG: it is a document, it can carry script and external references, and
  * serving one from our own origin next to a payment flow is a stored-XSS
- * surface for the sake of a file format. Buyers who have only an SVG can
- * rasterise it, and the favicon fetch does the same on their behalf.
+ * surface for the sake of a file format. Buyers who have only an SVG have to
+ * rasterise it themselves and upload the result.
+ *
+ * A Worker cannot rasterise — no canvas, no DOM, no image decoder — so for a
+ * while a site whose only declared icon was an SVG got "could not find an icon
+ * on that site" and no way forward. `blobatar.dev` is exactly that site: one
+ * `image/svg+xml` icon, no `/favicon.ico`.
+ *
+ * The buyer's browser has all three. So an SVG is now fetched, handed back to
+ * the panel as bytes rather than stored, drawn there into a canvas, and
+ * uploaded as the PNG that comes out — see `sniffVector` below and
+ * `src/wall/raster.ts`. Nothing in the bucket changes: R2 still holds only what
+ * `sniff` accepts, and this list is still the whole of what the wall serves.
  *
  * No GIF, because animation is the thing that turns a wall of logos into a
  * casino, and refusing the container is more honest than accepting it and
@@ -44,6 +70,33 @@ export function sniff(bytes: Uint8Array): string | null {
     return "image/webp";
   }
   return null;
+}
+
+/**
+ * SVG, and only SVG — the one format that is not stored but *is* accepted on
+ * the way in, because the buyer's browser can turn it into one that is.
+ *
+ * Deliberately separate from `sniff` rather than another branch inside it.
+ * `sniff` answers "may these bytes go in the bucket", and its answer for SVG
+ * must stay no; this answers "can the panel make something of these bytes",
+ * which is a different question asked in one place.
+ *
+ * A prefix match on `<svg`, after any XML declaration, comments, or doctype —
+ * an SVG in the wild often opens with `<?xml` and rarely with the element
+ * itself. Only the first kilobyte is examined: a file that has not reached its
+ * root element by then is not one the panel should be trying to draw.
+ */
+export function sniffVector(bytes: Uint8Array): string | null {
+  if (bytes.byteLength === 0 || bytes.byteLength > MAX_BYTES) return null;
+  // `fatal: false`, so a byte sequence that is not text at all decodes to
+  // replacement characters and simply fails to match, rather than throwing.
+  const head = new TextDecoder("utf-8", { fatal: false }).decode(bytes.slice(0, 1024)).trimStart();
+  if (!head.startsWith("<")) return null;
+  // `[\s/>]` rather than `[\s>]`: a hand-written `<svg/>` is legal and would
+  // otherwise be read as an element merely *starting* with those three letters.
+  return /^(<\?xml[^>]*>|<!--[\s\S]*?-->|<!DOCTYPE[^>]*>|\s)*<svg[\s/>]/i.test(head)
+    ? "image/svg+xml"
+    : null;
 }
 
 /**
@@ -118,6 +171,12 @@ function isPrivateHost(hostname: string): boolean {
  * Everything about this is best-effort: it runs against a stranger's server, on
  * a budget, and a failure is not an error the buyer needs to see. It returns
  * `null` and the interface offers the upload it was going to offer anyway.
+ *
+ * `type` may be `image/svg+xml`, which the caller must not put in the bucket.
+ * Candidate order is unchanged and still does the right thing: an
+ * `apple-touch-icon` outscores a vector, and a vector outscores the 16px
+ * `/favicon.ico` that gets appended last — which is the trade worth making,
+ * since a vector rasterises to any size cleanly and a 16px ico never will.
  */
 export async function fetchFavicon(
   siteUrl: string,
@@ -186,6 +245,7 @@ export function iconLinks(html: string, base: URL): string[] {
 async function tryFetchImage(
   url: string,
   fetchImpl: typeof fetch,
+  ceiling = MAX_BYTES,
 ): Promise<{ bytes: Uint8Array; type: string } | null> {
   const safe = normaliseUrl(url);
   if (!safe) return null;
@@ -200,12 +260,14 @@ async function tryFetchImage(
     // Checked before reading rather than after: a stranger's server offering a
     // 40MB "favicon" should cost us a header, not a body.
     const declared = Number(response.headers.get("content-length") ?? 0);
-    if (declared > MAX_BYTES) return null;
+    if (declared > ceiling) return null;
 
     const bytes = new Uint8Array(await response.arrayBuffer());
-    if (bytes.byteLength === 0 || bytes.byteLength > MAX_BYTES) return null;
+    if (bytes.byteLength === 0 || bytes.byteLength > ceiling) return null;
 
-    const type = sniff(bytes);
+    // A raster is preferred and returned as-is. A vector comes back tagged, for
+    // the caller to hand to a browser that can draw it; it is never stored.
+    const type = sniff(bytes) ?? sniffVector(bytes);
     return type ? { bytes, type } : null;
   } catch {
     return null;
@@ -235,3 +297,78 @@ export async function keyFor(bytes: Uint8Array, type: string): Promise<string> {
 /** A key is only ever what `keyFor` produces. Checked before it reaches R2, so
  * a claim row a stranger influenced cannot become a path traversal. */
 export const looksLikeKey = (value: string) => /^[0-9a-f]{32}\.(png|jpg|webp|ico)$/.test(value);
+
+/**
+ * The social preview a site declares, fetched from our side.
+ *
+ * The other half of "what should this cell look like". A favicon is a mark and
+ * a preview is a picture, and which one belongs on the wall is a judgement only
+ * the buyer can make: a 6x3 rectangle of a product screenshot says more than a
+ * 16px glyph stretched across it, and a 1x1 cell is the other way round. So
+ * both are offered and neither is chosen here.
+ *
+ * `og:image` first, then `twitter:image`, which is the order of how deliberate
+ * they are — a site with both has usually set the first on purpose and let a
+ * framework fill in the second.
+ *
+ * Same best-effort contract as `fetchFavicon`: `null` and the panel falls back
+ * to what it was already showing.
+ */
+export async function fetchOgImage(
+  siteUrl: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ bytes: Uint8Array; type: string; from: string } | null> {
+  const site = normaliseUrl(siteUrl);
+  if (!site) return null;
+  const base = new URL(site);
+
+  let candidates: string[] = [];
+  try {
+    const page = await fetchImpl(base.toString(), {
+      headers: { accept: "text/html", "user-agent": USER_AGENT },
+      redirect: "follow",
+      signal: AbortSignal.timeout(4000),
+    });
+    if (!page.ok) return null;
+    candidates = previewImages((await page.text()).slice(0, 64 * 1024), base);
+  } catch {
+    // Unlike a favicon, there is no well-known path to fall back on: a preview
+    // image exists only because the page says so.
+    return null;
+  }
+
+  for (const candidate of candidates.slice(0, 3)) {
+    const found = await tryFetchImage(candidate, fetchImpl, MAX_FETCH_BYTES);
+    if (found) return { ...found, from: candidate };
+  }
+  return null;
+}
+
+/**
+ * `<meta>` image URLs, best first.
+ *
+ * A regex again, and the same reasoning as `iconLinks` — but note what this one
+ * has to survive that the other did not: `property` and `content` appear in
+ * either order, both `property=` and `name=` are used in the wild for og tags,
+ * and the quoting is inconsistent. So the attribute is found within the tag
+ * rather than by position.
+ */
+export function previewImages(html: string, base: URL): string[] {
+  const found: { href: string; score: number }[] = [];
+
+  for (const tag of html.match(/<meta\b[^>]*>/gi) ?? []) {
+    const key = /\b(?:property|name)\s*=\s*["']?([^"'>\s]+)/i.exec(tag)?.[1]?.toLowerCase();
+    if (key !== "og:image" && key !== "og:image:url" && key !== "twitter:image") continue;
+
+    const href = /\bcontent\s*=\s*["']([^"']+)/i.exec(tag)?.[1];
+    if (!href) continue;
+
+    try {
+      found.push({ href: new URL(href, base).toString(), score: key === "twitter:image" ? 0 : 1 });
+    } catch {
+      // A malformed URL in a stranger's markup is not our problem to report.
+    }
+  }
+
+  return found.sort((a, b) => b.score - a.score).map(entry => entry.href);
+}

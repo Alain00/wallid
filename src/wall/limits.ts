@@ -22,3 +22,18 @@
  * plate than 24 of Latin — see the handoff's open decisions.
  */
 export const MAX_NAME = 24;
+
+/**
+ * What a claim's artwork may weigh, in bytes.
+ *
+ * Here rather than in the Worker because both ends need it now: the Worker
+ * refuses anything heavier, and the browser — which is what redraws an SVG or
+ * an oversized preview into something storable — has to aim *under* it. A
+ * client that encoded to 400 KB and a server that accepted 256 KB would fail
+ * after the upload rather than before it, which on the buying path is a
+ * spinner that ends in a sentence about bytes.
+ *
+ * 256 KB is generous for a logo and mean for anything trying to use this wall
+ * as image hosting.
+ */
+export const MAX_BYTES = 256 * 1024;

@@ -64,7 +64,7 @@
 		{
 			"binding": "WALLID",
 			"database_name": "wallid",
-			"database_id": "472b0659-6867-44eb-997f-4011dedeb548",
+			"database_id": "37888103-d9ed-4429-860b-7dd75a323e50",
 			"migrations_dir": "worker/wall/migrations"
 		}
 	],
@@ -103,6 +103,37 @@
 			"custom_domain": true
 		}
 	],
+	/*
+   * How many people are here, and how many came in the last hour.
+   *
+   * Analytics Engine rather than a third-party beacon, because the wall already
+   * has a heartbeat to ride on: the page re-reads `/wall/i` every thirty
+   * seconds, that request is already billed, and `worker/wall/pulse.ts` writes
+   * one row from it. No script tag, nothing for an ad blocker to remove,
+   * nothing in the client bundle, and `Privacy.tsx` stays true — the row holds
+   * a daily-rotating pseudonym and a country code.
+   *
+   * Free at this volume: 100,000 writes a day on the free plan, ten million a
+   * month on paid, against a ceiling of two writes per minute per open tab.
+   * Rows are kept three months. Read it with `bun run pulse`.
+   */
+	"analytics_engine_datasets": [
+		{
+			"binding": "PULSE",
+			"dataset": "wallid_pulse"
+		}
+	],
+	/*
+	 * The visit rollup. See `scheduled` in `worker/index.ts`.
+	 *
+	 * Hourly, on the hour. It copies each day's distinct-visitor count out of
+	 * Analytics Engine — which keeps rows for three months — into D1, which is
+	 * what lets the wall say "visits since launch" and still mean it in a year.
+	 */
+	"triggers": {
+		"crons": ["0 * * * *"]
+	},
+
 	"observability": {
 		"enabled": true
 	}

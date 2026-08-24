@@ -31,19 +31,75 @@ export async function verifyTurnstile(
   if (!secret) return false;
   if (typeof token !== "string" || !token || token.length > 2048) return false;
 
-  const body = new FormData();
-  body.append("secret", secret);
-  body.append("response", token);
-  // Cloudflare cross-checks the address the token was issued to. It is optional
-  // in the API and not optional here: without it a token solved once can be
-  // replayed from anywhere.
-  body.append("remoteip", ip);
+  /**
+   * One attempt, with or without the address cross-check.
+   *
+   * `remoteip` is optional in Cloudflare's API and was not optional here: it is
+   * what stops a token solved once from being replayed from anywhere else. The
+   * catch is that it compares the address that *solved* the challenge with the
+   * address that presents it, and those are not always the same machine's — a
+   * browser that solves over IPv6 and reaches the Worker over IPv4, a VPN that
+   * rotates, a corporate proxy — and when they differ Cloudflare reports the
+   * same `invalid-input-response` it uses for a token that is simply wrong.
+   *
+   * So the check is made twice when it fails, and the difference between the
+   * two answers is the diagnosis: still refused without the address means the
+   * token really does not belong to this secret; accepted without it means the
+   * addresses disagreed and the visitor is a real person on a normal network.
+   */
+  const attempt = async (withAddress: boolean) => {
+    const body = new FormData();
+    body.append("secret", secret);
+    body.append("response", token);
+    if (withAddress) body.append("remoteip", ip);
+
+    const response = await fetch(VERIFY, { method: "POST", body });
+    if (!response.ok) return { ok: false, codes: [`http-${response.status}`] };
+    const result = (await response.json()) as { success?: unknown; "error-codes"?: string[] };
+    return { ok: result.success === true, codes: result["error-codes"] ?? [] };
+  };
 
   try {
-    const response = await fetch(VERIFY, { method: "POST", body });
-    if (!response.ok) return false;
-    const result = (await response.json()) as { success?: unknown };
-    return result.success === true;
+    const strict = await attempt(true);
+    if (strict.ok) return true;
+
+    const loose = await attempt(false);
+
+    /*
+     * Why it failed, in the log.
+     *
+     * The visitor gets one sentence — "could not verify you are human" — and
+     * that is right: the difference between a bad secret and a replayed token
+     * is not their problem and telling them would be telling an attacker too.
+     * But it is *entirely* the operator's problem, and without this the two are
+     * indistinguishable from outside, which turns a mis-pasted key into an
+     * afternoon. `observability` is on in `wrangler.jsonc`, so this is one
+     * `wrangler tail` away.
+     *
+     * The codes worth knowing: `invalid-input-secret` is a secret that does not
+     * belong to the site key the page is using; `invalid-input-response` is a
+     * token that is malformed, or issued for a different site key;
+     * `timeout-or-duplicate` is a token already redeemed — which, on the second
+     * attempt, means the first one redeemed it and the address check was the
+     * only thing standing between this visitor and their cells.
+     */
+    console.warn(
+      "turnstile refused",
+      JSON.stringify({ withAddress: strict.codes, withoutAddress: loose.codes, accepted: loose.ok }),
+    );
+
+    /*
+     * Strict, still.
+     *
+     * The second attempt is a diagnosis, not a second chance: accepting a token
+     * that only verifies without the address check would give up replay
+     * protection for every visitor in order to rescue the ones whose network
+     * presents two addresses. It was briefly the other way round while this was
+     * being chased, and the log is what settled it — the token was failing both
+     * ways, so the address was never the problem and the trade was buying
+     * nothing.
+     */
+    return strict.ok;
   } catch {
     // The verifier being unreachable is the one case where failing closed costs
     // a real visitor their placement, and it is still the right answer: a

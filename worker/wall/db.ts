@@ -134,6 +134,47 @@ export async function counters(db: D1Database): Promise<{ claimed: number; cents
   return { claimed: read("claimed"), cents: read("cents") };
 }
 
+/**
+ * The wall's visits since launch: distinct visitors on each day, added up.
+ *
+ * A `SUM` over one row per day, which is 365 rows a year and will not need an
+ * index this decade. Zero when the table is empty, which is a new deployment
+ * rather than an error — `COALESCE`, because `SUM` over no rows is `NULL`.
+ */
+export async function visits(db: D1Database): Promise<number> {
+  const row = await db
+    .prepare("SELECT COALESCE(SUM(visitors), 0) AS total FROM visit_days")
+    .first<{ total: number }>();
+  return Number(row?.total ?? 0);
+}
+
+/**
+ * Write the daily figures the rollup read out of Analytics Engine.
+ *
+ * An upsert rather than an insert, and that is what makes the rollup safe to
+ * run as often as it likes: the current day's row is a partial count that gets
+ * overwritten by a larger one every hour until the day ends, and re-reading a
+ * finished day writes the same number it already held. A missed run repairs
+ * itself on the next one, because the query behind this looks back further than
+ * the interval between runs.
+ */
+export function recordVisitDays(
+  db: D1Database,
+  days: { day: number; visitors: number }[],
+): Promise<unknown> {
+  if (!days.length) return Promise.resolve();
+  return db.batch(
+    days.map(entry =>
+      db
+        .prepare(
+          `INSERT INTO visit_days (day, visitors) VALUES (?1, ?2)
+           ON CONFLICT (day) DO UPDATE SET visitors = ?2`,
+        )
+        .bind(entry.day, entry.visitors),
+    ),
+  );
+}
+
 export async function claimById(db: D1Database, id: string): Promise<ClaimRow | null> {
   return db.prepare("SELECT * FROM claims WHERE id = ?1").bind(id).first<ClaimRow>();
 }

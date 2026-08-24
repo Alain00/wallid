@@ -27,7 +27,19 @@ async function call<T>(secret: string, path: string, form: Record<string, string
       // Stripe pins behaviour to the version the account was created against
       // unless told otherwise. Pinned here so an account-level version bump in
       // the dashboard cannot silently change what this code receives.
-      "stripe-version": "2026-06-30.clover",
+      //
+      // It must be a version Stripe has actually released: an unknown string is
+      // not ignored, it is a 400 on every call, which is how this arrived —
+      // `2026-06-30.clover` was a date nobody had shipped, and it took the
+      // checkout route down with "Invalid Stripe API version" the first time a
+      // real key was pointed at it. To check a candidate, ask Stripe rather
+      // than a changelog:
+      //
+      //   curl -s -o /dev/null -w '%{http_code}' https://api.stripe.com/v1/balance \
+      //     -u "$STRIPE_SECRET_KEY:" -H 'stripe-version: 2025-10-29.clover'
+      //
+      // 200 means released, 400 means invented.
+      "stripe-version": "2025-10-29.clover",
     },
     body: new URLSearchParams(form),
   });

@@ -1,4 +1,4 @@
-import { cell, chunksCovering, type Cell, type Chunk } from "./geometry";
+import { cell, chunksCovering, type Cell, type Chunk, type Rect } from "./geometry";
 
 /**
  * The wall's view of itself: where the camera is, and the arithmetic that turns
@@ -104,14 +104,22 @@ export function screenToCell(camera: Camera, view: Viewport, sx: number, sy: num
 /**
  * The cell a pointer is over.
  *
- * `Math.round`, not `Math.floor`, because a cell is drawn centred on its own
- * integer coordinate rather than with its corner there — the wall reads as a
- * field of tiles, not as a spreadsheet, and centring is what
- * lets artwork sit inside its cell without belonging to the next one.
+ * `Math.floor`, because a cell's integer coordinate is its top-left *corner*,
+ * not its centre. That is the convention the painter uses everywhere — a tile
+ * is drawn from `cellToScreen(x, y)` and spans one cell right and down, the
+ * lattice draws its lines on the integers, and the wall's edge runs from (0,0)
+ * to (SIDE, SIDE). Anything else here and the picked cell is not the drawn one.
+ *
+ * It was `Math.round` on the theory that cells are centred on their integers,
+ * and nothing in `paint.ts` has ever agreed: rounding picks the cell whose
+ * corner is nearest, so the pointer selected the tile up-left of itself over
+ * the near half of every cell and the one down-right over the far half. Half a
+ * cell out, diagonally, at every zoom — close enough to look like jitter rather
+ * than like an off-by-one.
  */
 export function cellUnder(camera: Camera, view: Viewport, sx: number, sy: number): Cell {
   const at = screenToCell(camera, view, sx, sy);
-  return cell(Math.round(at.x), Math.round(at.y));
+  return cell(Math.floor(at.x), Math.floor(at.y));
 }
 
 /**
@@ -151,6 +159,11 @@ export function chunksInView(camera: Camera, view: Viewport, margin = 4): Chunk[
  *
  * `at` is in CSS pixels from the top-left of the surface, which is what a
  * layout measurement gives you.
+ *
+ * `target` may be fractional, which is what makes this the drag solver too: a
+ * drag grabs a point *within* a cell, and putting the cell's corner under the
+ * cursor instead would snap the wall by up to a cell at the start of every
+ * gesture. See `onPointerMove` in `Wall.tsx`.
  */
 export function framing(view: Viewport, target: Cell, at: { x: number; y: number }, zoom: number): Camera {
   const scale = CELL * zoom;
@@ -161,10 +174,71 @@ export function framing(view: Viewport, target: Cell, at: { x: number; y: number
   };
 }
 
-/** Dragging: pixels moved, translated into cells at the current zoom. */
-export function panBy(camera: Camera, dx: number, dy: number): Camera {
+/**
+ * The camera that shows `rect` in the part of the viewport nothing else is
+ * using.
+ *
+ * For the buy panel, which is the only thing on this site that covers the wall
+ * while asking a question about it: a preview of the cells you are buying is
+ * worth nothing underneath the form. `reserved` is the panel's measured box,
+ * and this reads the *shape* of it rather than a breakpoint — a box spanning
+ * nearly the whole width is the phone sheet, so the room is above it; anything
+ * narrower is the docked column, so the room is beside it. Two cases, because
+ * the panel only ever takes two shapes.
+ *
+ * `fill` is how much of that room the rectangle should occupy. Comfortably
+ * under half by default: a rectangle that fits the space exactly reads as
+ * trapped in it, and the wall around a claim is part of what the buyer is
+ * judging — a cell is worth what it is worth partly because of what it is next
+ * to.
+ *
+ * A `null` reserve means nothing is in the way, and the whole viewport is the
+ * room.
+ */
+export function placeInFreeSpace(
+  view: Viewport,
+  reserved: { left: number; top: number; width: number } | null,
+  rect: Rect,
+  fill = 0.55,
+): Camera {
+  const sheet = reserved !== null && reserved.width > view.width * 0.9;
+
+  // Floors, so a panel that covers almost everything still leaves somewhere to
+  // fly to rather than a zero-sized region and an infinite zoom.
+  const free = !reserved
+    ? { width: view.width, height: view.height }
+    : sheet
+      ? { width: view.width, height: Math.max(120, reserved.top) }
+      : { width: Math.max(160, reserved.left), height: view.height };
+
+  const zoom = clampZoom(
+    Math.min((free.width * fill) / (rect.w * CELL), (free.height * fill) / (rect.h * CELL)),
+  );
+
+  return framing(
+    view,
+    { x: rect.x + rect.w / 2, y: rect.y + rect.h / 2 },
+    { x: free.width / 2, y: free.height / 2 },
+    zoom,
+  );
+}
+
+/**
+ * Move the camera by a distance in screen pixels.
+ *
+ * The camera, not the wall: `moveBy(camera, 90, 0)` looks 90px further to the
+ * right, so the wall slides 90px to the *left* under it. That is the sense the
+ * wheel and the arrow keys want, and naming it for the camera is the only way
+ * to keep the sign straight — this was `panBy`, which named neither end of the
+ * movement and was called with the sign inverted at every one of its callers.
+ *
+ * Not for dragging. A drag has a point that must stay under the cursor, and
+ * `framing` solves for that directly; accumulating deltas instead lets the
+ * grabbed point drift away from the pointer over a long gesture.
+ */
+export function moveBy(camera: Camera, dx: number, dy: number): Camera {
   const scale = CELL * camera.zoom;
-  return { ...camera, x: camera.x - dx / scale, y: camera.y - dy / scale };
+  return { ...camera, x: camera.x + dx / scale, y: camera.y + dy / scale };
 }
 
 /**
@@ -181,6 +255,37 @@ export function zoomAt(camera: Camera, view: Viewport, factor: number, sx: numbe
   const zoom = clampZoom(camera.zoom * factor);
   const after = screenToCell({ ...camera, zoom }, view, sx, sy);
   return { x: camera.x + (before.x - after.x), y: camera.y + (before.y - after.y), zoom };
+}
+
+/** Two fingers, as the pointer events see them: how far apart they are and
+ * where their midpoint sits, both in canvas pixels. */
+export type Pinch = { dist: number; at: { x: number; y: number } };
+
+/**
+ * The camera after a pinch moves from `from` to `to`.
+ *
+ * One gesture, not two. A pinch that also slides is the ordinary way a hand
+ * uses a map — the fingers spread *and* travel, usually without their owner
+ * deciding to do either — so this solves for both at once: the wall point that
+ * was between the fingers ends up between the fingers, at the zoom their new
+ * spread asks for. Zoom alone would pin the wall to the middle of the hand and
+ * make panning a separate, deliberate stroke; the two together are why a phone
+ * map feels like a sheet of paper being pulled about.
+ *
+ * `framing` rather than a zoom followed by a move, and for the reason it exists
+ * for the drag: it solves "this point is under that pixel" directly. Composing
+ * the two instead means choosing which midpoint the zoom is anchored to, and
+ * either choice leaves the grabbed point drifting a little further from the
+ * fingers on every frame of a long gesture.
+ *
+ * A zero distance at either end means there is nothing to scale by — the first
+ * move of a gesture, or two fingers on the same pixel — and the camera is
+ * returned untouched rather than sent to infinity.
+ */
+export function pinchTo(camera: Camera, view: Viewport, from: Pinch, to: Pinch): Camera {
+  if (!(from.dist > 0) || !(to.dist > 0)) return camera;
+  const grabbed = screenToCell(camera, view, from.at.x, from.at.y);
+  return framing(view, grabbed, to.at, clampZoom(camera.zoom * (to.dist / from.dist)));
 }
 
 const easeInOut = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2);

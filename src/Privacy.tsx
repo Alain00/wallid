@@ -23,10 +23,19 @@ export function Privacy() {
           Card details go to Stripe and never reach us. We keep the payment id and the amount.
         </Item>
         <Item>
-          Logos you upload, and logos we fetch from the site you link to, stored under a hash of
-          their own bytes.
+          Logos we fetch from the site you link to — its icon or its preview image — stored under a
+          hash of their own bytes. There is nothing to upload, so there is nothing of yours here
+          that your own server was not already serving to anybody who asked.
         </Item>
-        <Item>No analytics, and no third-party scripts other than Stripe and Turnstile.</Item>
+        <Item>
+          No third-party analytics and no tracking scripts other than Stripe and Turnstile. The wall
+          counts how many people are looking at it, from the requests it already serves: one row
+          holding a country and a code derived from your address, which changes every day and cannot
+          be traced back to you or joined across days. The count on the wall is that, added up —
+          how many people are here in the last minute and a half. The visit total is the same rows
+          counted once a day and kept — a running number of days somebody showed up, never a history
+          of who.
+        </Item>
       </ul>
       <p className="text-muted text-lg leading-relaxed">
         Anything to remove:{" "}

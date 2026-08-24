@@ -8,6 +8,7 @@
  * Tailwind source. The size gate below is what makes that failure loud.
  */
 import { cp, rm } from "node:fs/promises";
+import type { BunPlugin } from "bun";
 import tailwind from "bun-plugin-tailwind";
 import type { ReactNode } from "react";
 import { renderToString } from "react-dom/server";
@@ -59,6 +60,43 @@ await writeFavicon();
 await writePages();
 await writeSitemap();
 
+/**
+ * God mode, cut out of the bundle rather than switched off in it.
+ *
+ * `src/wall/god.ts` places and deletes claims for free against routes that only
+ * exist in `server.ts`, and the client half of it is guarded by
+ * `AVAILABLE = process.env.NODE_ENV !== "production"` — which is a constant
+ * `false` here, so nothing renders. That was not enough: the guard is a
+ * cross-module constant, and Bun keeps the module rather than folding the
+ * branches away, so a production bundle still carried the fetch helpers and the
+ * string `/wall/dev/settle`. Inert — the Worker has no such route and would
+ * answer with the 404 page — but it is a description of a back door, shipped to
+ * everybody, for no benefit.
+ *
+ * So the module is replaced at build time with one that has the same shape and
+ * no behaviour. The guard stays where it is as the thing that stops the UI
+ * appearing; this is what makes the code not be there at all.
+ *
+ * If the stub ever drifts from the real module's exports, the build fails on
+ * the missing name rather than shipping the real one — which is the failure
+ * mode to want.
+ */
+const withoutGodMode: BunPlugin = {
+  name: "without-god-mode",
+  setup(build) {
+    build.onLoad({ filter: /src[\\/]wall[\\/]god\.ts$/ }, () => ({
+      loader: "ts",
+      contents: `
+        export const AVAILABLE = false;
+        export const enabled = () => false;
+        export const enable = () => {};
+        export const place = async () => ({ error: "not here" });
+        export const free = async () => null;
+      `,
+    }));
+  },
+};
+
 const result = await Bun.build({
   /*
    * One document per page, one bundle per document.
@@ -77,10 +115,30 @@ const result = await Bun.build({
   entrypoints: PAGES.map(page => `./${page.name}.html`),
   outdir: OUT,
   minify: true,
-  plugins: [tailwind],
+  plugins: [tailwind, withoutGodMode],
   // React ships its development build unless NODE_ENV is pinned — worth ~300 KB
   // here, and dev-only warnings have no audience on a static landing page.
-  define: { "process.env.NODE_ENV": '"production"' },
+  define: {
+    "process.env.NODE_ENV": '"production"',
+    /*
+     * Always a literal, set or not.
+     *
+     * `env: "BUN_PUBLIC_*"` below substitutes what is set and leaves what is
+     * not, so an unset key would reach the browser as a live `process.env`
+     * read — which is a `ReferenceError` on the page the wall is on. Defining
+     * it here means the browser never sees the read: it sees the key, or it
+     * sees the empty string and falls back to Cloudflare's test key in
+     * `Turnstile.tsx`.
+     *
+     * Named explicitly rather than folded into the wildcard because this is the
+     * one public variable whose absence is silently wrong rather than loudly
+     * broken — the wall renders, the widget appears, and every purchase is
+     * refused as not-human.
+     */
+    "process.env.BUN_PUBLIC_TURNSTILE_SITE_KEY": JSON.stringify(
+      process.env.BUN_PUBLIC_TURNSTILE_SITE_KEY ?? "",
+    ),
+  },
   /*
    * The same prefix `bunfig.toml` gives the dev server, so a value reaches the
    * bundle by the same rule in both. Only `BUN_PUBLIC_*`: everything else in

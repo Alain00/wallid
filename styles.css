@@ -189,6 +189,35 @@
 }
 
 /*
+ * The live dot beside the visitor count.
+ *
+ * It breathes rather than blinks. A blink is a warning light — it says
+ * something needs attention — and nothing here does; the dot is only claiming
+ * that the number beside it is about the present tense. So: a slow, shallow
+ * fade with a long rest at full opacity, which reads as alive at the edge of
+ * vision and is invisible when read directly.
+ *
+ * Four seconds because a period near one second is a heartbeat and a heartbeat
+ * is urgent. This is closer to a room breathing.
+ */
+@media (prefers-reduced-motion: no-preference) {
+  .pulse-dot {
+    animation: pulse-dot 4s ease-in-out infinite;
+  }
+}
+
+@keyframes pulse-dot {
+  0%,
+  55%,
+  100% {
+    opacity: 1;
+  }
+  25% {
+    opacity: 0.35;
+  }
+}
+
+/*
  * Below-the-fold sections.
  *
  * `content-visibility: auto` lets the browser skip style, layout and paint for

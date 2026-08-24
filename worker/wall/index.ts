@@ -25,6 +25,7 @@ import {
   markLost,
   recountClaimed,
   settleClaim,
+  visits,
   type D1Database,
 } from "./db";
 import {
@@ -35,9 +36,23 @@ import {
   sameSecret,
   setCookie,
   tokenFrom,
+  issuePass,
+  verifyPass,
 } from "./identity";
 import { checkLabel } from "./moderation";
-import { fetchFavicon, keyFor, looksLikeKey, MAX_BYTES, normaliseUrl, sniff } from "./artwork";
+import {
+  fetchFavicon,
+  fetchOgImage,
+  keyFor,
+  looksLikeKey,
+  MAX_BYTES,
+  normaliseUrl,
+  sniff,
+  sniffVector,
+} from "./artwork";
+// Aliased: `beats` from `pricing.ts` is already imported above, and a metric
+// and a price rule sharing a name in one file is a trap.
+import { beat as recordBeat, here, type AnalyticsEngineDataset } from "./pulse";
 import { createCheckout, refund, verifyWebhook } from "./stripe";
 import { verifyTurnstile } from "./turnstile";
 
@@ -78,6 +93,16 @@ export type WallidEnv = {
   WALL_ADMIN_TOKEN?: string;
   WALL_BLOCKLIST?: string;
   SITE_URL?: string;
+  /* Optional: the dev server has no Analytics Engine, and the wall must run
+   * without one. See `pulse.ts`. */
+  PULSE?: AnalyticsEngineDataset;
+  /* Reading the dataset back, for the counter on the wall. Separate from the
+   * binding above because writing and reading Analytics Engine are two
+   * different mechanisms: the binding writes from the edge, and reading is an
+   * HTTP API that wants an account token. See `here` in `pulse.ts`. */
+  PULSE_ACCOUNT_ID?: string;
+  PULSE_READ_TOKEN?: string;
+  PULSE_DATASET?: string;
 };
 
 type Ctx = { waitUntil(promise: Promise<unknown>): void } | undefined;
@@ -94,6 +119,48 @@ const json = (body: unknown, init: ResponseInit = {}) =>
 const refuse = (status: number, message: string) => json({ error: message }, { status });
 
 const now = () => Math.floor(Date.now() / 1000);
+
+/**
+ * The human check, in one place: a fresh Turnstile token, or a pass issued
+ * against one within the last ten minutes.
+ *
+ * Both, rather than either alone, because the two guarded routes are steps in
+ * one flow and a Turnstile token is spent by the first of them.
+ *
+ * The pass is checked first, and only because it is local: verifying it is an
+ * HMAC, where `verifyTurnstile` is a round trip to Cloudflare. Order cannot
+ * change the answer — a bad pass falls through to the token either way — so it
+ * may as well be the order that does not spend a request per call.
+ *
+ * There is still no bypass. A pass exists only downstream of a real solve from
+ * the same address, `verifyTurnstile` still refuses when no secret is
+ * configured, and `verifyPass` is an HMAC under `WALL_SECRET` — a deployment
+ * missing that has bigger problems than this route.
+ */
+async function allowed(
+  token: unknown,
+  pass: unknown,
+  env: WallidEnv,
+  address: string,
+): Promise<boolean> {
+  if (await verifyPass(pass, env.WALL_SECRET, address, now())) return true;
+  return verifyTurnstile(token, env.TURNSTILE_SECRET, address);
+}
+
+/**
+ * Bytes as base64, in chunks.
+ *
+ * `String.fromCharCode(...bytes)` is the one-liner everybody writes and it
+ * throws on anything large — the spread becomes one argument per byte, and a
+ * 256 KB icon is 262,144 of them against an engine's argument limit.
+ */
+function base64(bytes: Uint8Array): string {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  }
+  return btoa(binary);
+}
 
 /**
  * The edge cache, and what it is doing here.
@@ -141,11 +208,70 @@ export async function wall(request: Request, env: WallidEnv, ctx?: Ctx): Promise
    * response to their own checkout.
    */
   if (path === "i") {
+    /*
+     * The heartbeat, and the only place the wall counts anybody.
+     *
+     * Here rather than at the top of this function because this is the request
+     * the page repeats: `Wall.tsx` re-reads the index every thirty seconds
+     * while the tab is visible, so one visitor present for ten minutes is
+     * twenty rows under one pseudonym — which is exactly the shape "how many
+     * people are here right now" needs. Counting every wall route instead
+     * would weight a buyer mid-checkout as a crowd.
+     *
+     * Before `cached`, deliberately: an edge-cache hit still ran this Worker
+     * and still means somebody is looking at the wall. Not awaited, so the
+     * measurement is never in front of the response.
+     *
+     * The undercount to know about: the index is `max-age=30` and the client's
+     * own timer is also thirty seconds, so a browser occasionally answers a
+     * poll from its own HTTP cache and that beat never arrives. It costs a
+     * little of the live number's precision and nothing of the hourly one,
+     * which is a distinct-visitor count and needs only one beat to land.
+     */
+    const beating = recordBeat(request, env, Date.now());
+    if (ctx) ctx.waitUntil(beating);
+
     return cached(request, ctx, async () => {
       const [versions, totals] = await Promise.all([chunkVersions(db), counters(db)]);
       return json(
         { chunks: Object.fromEntries(versions.map(c => [c.key, c.version])), ...totals },
         { headers: { "cache-control": "public, max-age=30" } },
+      );
+    });
+  }
+
+  /*
+   * How many people are at the wall, for the wall to say so.
+   *
+   * Its own route rather than a field on the index, and that is a latency
+   * decision rather than a tidiness one. The index is the wall's critical path
+   * — nothing is painted until it lands — and this is a round trip to
+   * Cloudflare's analytics API. Folding one into the other would put a few
+   * hundred milliseconds of decoration in front of every first paint, and would
+   * mean an analytics outage delaying the board itself. Separate, it is a
+   * request the page makes when it is already drawn, and a failure is a chip
+   * that does not appear.
+   *
+   * Cached, which is what makes it affordable: the client asks once a minute,
+   * the edge answers almost all of those, and the read quota is spent per colo
+   * per TTL rather than per visitor. Thirty seconds, matching the beat that
+   * feeds it — a shorter TTL would buy a number that cannot have changed.
+   *
+   * A failure caches for ten. Long enough that a bad minute at the API is not
+   * amplified into a request per client, short enough that the chip comes back
+   * quickly once the API does.
+   */
+  if (path === "pulse") {
+    return cached(request, ctx, async () => {
+      // Two numbers with two sources, asked at once: the live one is a query
+      // against Analytics Engine, the total is a sum of the rows the rollup has
+      // already put in D1. The total is what the wall can still say when the
+      // analytics API is refusing — they fail independently, and the response
+      // carries whichever survived.
+      const [count, total] = await Promise.all([here(env), visits(db).catch(() => null)]);
+      return json(
+        { here: count, visits: total },
+        { headers: { "cache-control": `public, max-age=${count === null ? 10 : 30}` } },
       );
     });
   }
@@ -241,9 +367,13 @@ export async function wall(request: Request, env: WallidEnv, ctx?: Ctx): Promise
     if (!address) return refuse(403, "no address");
 
     const form = await request.formData();
-    if (!(await verifyTurnstile(form.get("turnstile"), env.TURNSTILE_SECRET, address))) {
+    if (!(await allowed(form.get("turnstile"), form.get("pass"), env, address))) {
       return refuse(403, "could not verify you are human");
     }
+    // Handed back on every answer below, so the panel's next guarded call —
+    // a second attempt, the PNG of a rasterised vector, the checkout itself —
+    // does not try to redeem a token Cloudflare has already spent.
+    const pass = await issuePass(env.WALL_SECRET, address, now());
 
     const file = form.get("file");
     let bytes: Uint8Array | null = null;
@@ -255,18 +385,71 @@ export async function wall(request: Request, env: WallidEnv, ctx?: Ctx): Promise
     } else {
       const site = normaliseUrl(String(form.get("url") ?? ""));
       if (!site) return refuse(400, "that does not look like an https address");
-      const found = await fetchFavicon(site);
-      if (!found) return refuse(404, "could not find an icon on that site");
-      bytes = found.bytes;
-      source = "favicon";
+
+      /*
+       * Which picture of themselves the buyer wants: the mark or the preview.
+       *
+       * Asked for one at a time rather than resolved together, because the
+       * preview is a photograph on the far side of somebody else's server and
+       * the icon is not. Fetching both on every keystroke-completed URL would
+       * make the common path pay for the rare one; this way the og fetch
+       * happens when a buyer actually asks to see it.
+       */
+      if (form.get("want") === "og") {
+        const preview = await fetchOgImage(site);
+        if (!preview) return refuse(404, "that site does not declare a preview image");
+        bytes = preview.bytes;
+        source = "og";
+      } else {
+        const found = await fetchFavicon(site);
+        if (!found) return refuse(404, "could not find an icon on that site");
+        bytes = found.bytes;
+        source = "favicon";
+      }
     }
 
     const type = sniff(bytes);
+
+    /*
+     * A vector goes back to the panel instead of into the bucket.
+     *
+     * This is the whole of the SVG story on the server: the bytes are never
+     * stored, never served from our origin, and never given a key. They make
+     * one trip to the browser that asked for them, which draws them into a
+     * canvas and posts the PNG back through this same route — where it is an
+     * upload like any other and `sniff` is the only thing that decides.
+     *
+     * `no-store` and a `pass` rather than a key, so nothing downstream can
+     * mistake this for a resolved artwork.
+     */
+    if (!type && sniffVector(bytes)) {
+      return json(
+        { redraw: base64(bytes), type: "image/svg+xml", source, pass },
+        { headers: { "cache-control": "no-store" } },
+      );
+    }
+
     if (!type) return refuse(415, "png, jpeg, webp or ico only");
+
+    /*
+     * Too big to store, so it goes to the browser to be redrawn at tile size.
+     *
+     * A social preview is 1200x630 and routinely over the bucket's limit, and
+     * the wall draws it into at most a few hundred pixels — so the bytes being
+     * refused are bytes nobody was ever going to see. Same round trip an SVG
+     * takes, and the same reason: the browser is the only machine in this chain
+     * that can resample an image.
+     */
+    if (bytes.byteLength > MAX_BYTES) {
+      return json(
+        { redraw: base64(bytes), type, source, pass },
+        { headers: { "cache-control": "no-store" } },
+      );
+    }
 
     const key = await keyFor(bytes, type);
     await env.ART.put(key, bytes, { httpMetadata: { contentType: type } });
-    return json({ key, source, type }, { headers: { "cache-control": "no-store" } });
+    return json({ key, source, type, pass }, { headers: { "cache-control": "no-store" } });
   }
 
   /*
@@ -286,7 +469,7 @@ export async function wall(request: Request, env: WallidEnv, ctx?: Ctx): Promise
     const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
     if (!body) return refuse(400, "expected JSON");
 
-    if (!(await verifyTurnstile(body.turnstile, env.TURNSTILE_SECRET, address))) {
+    if (!(await allowed(body.turnstile, body.pass, env, address))) {
       return refuse(403, "could not verify you are human");
     }
 
@@ -333,15 +516,37 @@ export async function wall(request: Request, env: WallidEnv, ctx?: Ctx): Promise
     }).run();
 
     const origin = env.SITE_URL ?? url.origin;
-    const session = await createCheckout(env.STRIPE_SECRET_KEY, {
-      claimId,
-      label: label.value,
-      cells: priced.cells.length,
-      amountCents: priced.totalCents,
-      email,
-      successUrl: `${origin}/?claim=${claimId}`,
-      cancelUrl: `${origin}/?cancelled=${claimId}`,
-    });
+
+    /*
+     * Stripe's refusals are answered, not thrown.
+     *
+     * An uncaught error here leaves the Worker returning Cloudflare's HTML 500,
+     * which the panel cannot parse — so a misconfigured Stripe account reached
+     * the buyer as "could not reach the wall", a sentence about the network for
+     * a problem that had nothing to do with it. The claim row is already
+     * written at this point and is left pending, which is the same state an
+     * abandoned checkout leaves behind and needs no cleanup.
+     *
+     * The message goes to the log rather than to the buyer: Stripe's text names
+     * dashboard settings and API parameters, which tells the person who can fix
+     * it exactly what to do and tells everybody else something alarming and
+     * useless.
+     */
+    let session: { id: string; url: string };
+    try {
+      session = await createCheckout(env.STRIPE_SECRET_KEY, {
+        claimId,
+        label: label.value,
+        cells: priced.cells.length,
+        amountCents: priced.totalCents,
+        email,
+        successUrl: `${origin}/?claim=${claimId}`,
+        cancelUrl: `${origin}/?cancelled=${claimId}`,
+      });
+    } catch (error) {
+      console.error("stripe checkout refused", String(error));
+      return refuse(502, "payments are not working right now — nothing was charged");
+    }
 
     return json(
       { url: session.url, claimId, totalCents: priced.totalCents },

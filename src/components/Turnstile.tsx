@@ -28,17 +28,47 @@ import { useEffect, useRef, useState } from "react";
 const TEST_KEY = "1x00000000000000000000AA";
 
 /*
- * Guarded, and the guard is load-bearing rather than defensive style.
+ * Read straight, with no `typeof process` around it — and that is the whole
+ * point of this comment, because the guard that used to be here is what put
+ * production on the test key for an afternoon.
  *
- * `BUN_PUBLIC_*` values are inlined by the bundler only when they are actually
- * set; an unset one is left in the output as a literal `process.env.…`, and
- * `process` does not exist in a browser. So a deploy that simply forgot the
- * variable would not fall back to the test key — it would throw a
- * ReferenceError on the page the wall is on. Checked in the compiled bundle,
- * not the source, which is the only place the difference is visible.
+ * It was written to stop a `ReferenceError` if the variable were never set. But
+ * `env: "BUN_PUBLIC_*"` in `build.ts` substitutes the *value* and leaves the
+ * guard alone, so the compiled expression was
+ *
+ *   typeof process < "u" && "0x4AAA…" || "1x0000…"
+ *
+ * and in a browser `typeof process` is `"undefined"`, so the whole thing
+ * collapsed to the test key. The real key was right there in the bundle,
+ * inlined, next to the branch that threw it away — which is why grepping the
+ * bundle for it said everything was fine.
+ *
+ * The `ReferenceError` it was defending against cannot happen now: `build.ts`
+ * defines this key unconditionally, so it is always a literal by the time it
+ * reaches a browser.
+ */
+/*
+ * Development is always the test pair, whatever `.env` says.
+ *
+ * The two halves of Turnstile have to match: a token minted by the real *site*
+ * key only verifies against the real *secret*. `.env` is read at build time and
+ * carries the production site key; `.dev.vars` carries the secret and falls
+ * back to Cloudflare's always-passes test one when it has none. A machine set
+ * up for production therefore has a real key on the client and a test secret on
+ * the server — and every write fails with "could not verify you are human",
+ * which names neither half and sounds like the visitor's fault.
+ *
+ * The real key would not have worked on localhost anyway: the widget is scoped
+ * to the hostnames it was created for, and `localhost` is not one of them.
+ *
+ * `process.env.NODE_ENV` is substituted with a literal by `build.ts`, so a
+ * production bundle contains `"production" !== "production"` and the branch
+ * disappears — the shipped page cannot reach the test key by any route. That
+ * matters more than it looks: this file's other long comment is about the
+ * afternoon production spent on the test key.
  */
 const SITE_KEY =
-  (typeof process !== "undefined" && process.env.BUN_PUBLIC_TURNSTILE_SITE_KEY) || TEST_KEY;
+  process.env.NODE_ENV !== "production" ? TEST_KEY : process.env.BUN_PUBLIC_TURNSTILE_SITE_KEY || TEST_KEY;
 
 const SCRIPT = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
 

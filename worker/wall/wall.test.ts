@@ -8,7 +8,9 @@ import {
   counters,
   insertPendingClaim,
   recountClaimed,
+  recordVisitDays,
   settleClaim,
+  visits,
   type D1Database,
 } from "./db";
 import { sqliteD1 } from "./sqlite";
@@ -204,5 +206,44 @@ describe("moderation", () => {
     expect(rows[0]!.label).toBe("");
     expect(rows[0]!.image_key).toBeNull();
     expect((await cellsInBox(db, 0, 0, 0, 0))[0]!.price_cents).toBe(5_000);
+  });
+});
+
+/**
+ * The visit ledger, against the real table.
+ *
+ * It exists because Analytics Engine forgets after three months and "since
+ * launch" must not. Everything below is about the rollup being safe to run
+ * again — which it is, hourly, forever.
+ */
+describe("visits since launch", () => {
+  test("an empty wall has none, rather than null", async () => {
+    expect(await visits(fresh())).toBe(0);
+  });
+
+  test("adds the days up", async () => {
+    const db = fresh();
+    await recordVisitDays(db, [
+      { day: 20687, visitors: 41 },
+      { day: 20688, visitors: 128 },
+    ]);
+    expect(await visits(db)).toBe(169);
+  });
+
+  /* The rollup re-reads days it has already written, every hour, by design:
+   * today's row is a partial count until the day ends. Re-running must replace
+   * the figure rather than add to it, or the total inflates by an hour's worth
+   * of double-counting every hour. */
+  test("re-running the rollup replaces a day rather than adding to it", async () => {
+    const db = fresh();
+    await recordVisitDays(db, [{ day: 20689, visitors: 7 }]);
+    await recordVisitDays(db, [{ day: 20689, visitors: 12 }]);
+    expect(await visits(db)).toBe(12);
+  });
+
+  test("a run with nothing to write is not an error", async () => {
+    const db = fresh();
+    await recordVisitDays(db, []);
+    expect(await visits(db)).toBe(0);
   });
 });

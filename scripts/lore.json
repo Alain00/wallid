@@ -1,0 +1,380 @@
+[
+  {
+    "x": 41,
+    "y": 55,
+    "w": 6,
+    "h": 3,
+    "label": "stackoverflow.com",
+    "url": "https://stackoverflow.com/",
+    "want": "og"
+  },
+  {
+    "x": 41,
+    "y": 52,
+    "w": 6,
+    "h": 4,
+    "label": "openai.com",
+    "url": "https://openai.com/",
+    "want": "og"
+  },
+  {
+    "x": 48,
+    "y": 52,
+    "w": 5,
+    "h": 3,
+    "label": "anthropic.com",
+    "url": "https://anthropic.com/",
+    "want": "og"
+  },
+  {
+    "x": 54,
+    "y": 52,
+    "w": 4,
+    "h": 3,
+    "label": "x.ai",
+    "url": "https://x.ai/",
+    "want": "og"
+  },
+  {
+    "x": 53,
+    "y": 54,
+    "w": 4,
+    "h": 3,
+    "label": "nousresearch.com",
+    "url": "https://nousresearch.com/",
+    "want": "og"
+  },
+  {
+    "x": 59,
+    "y": 52,
+    "w": 5,
+    "h": 2,
+    "label": "huggingface.co",
+    "url": "https://huggingface.co/",
+    "want": "og"
+  },
+  {
+    "x": 59,
+    "y": 54,
+    "w": 5,
+    "h": 2,
+    "label": "deepseek.com",
+    "url": "https://deepseek.com/",
+    "want": "og"
+  },
+  {
+    "x": 59,
+    "y": 56,
+    "w": 5,
+    "h": 2,
+    "label": "mistral.ai",
+    "url": "https://mistral.ai/",
+    "want": "og"
+  },
+  {
+    "x": 67,
+    "y": 52,
+    "w": 6,
+    "h": 3,
+    "label": "hashicorp.com",
+    "url": "https://developer.hashicorp.com/",
+    "want": "og"
+  },
+  {
+    "x": 67,
+    "y": 54,
+    "w": 6,
+    "h": 2,
+    "label": "opentofu.org",
+    "url": "https://opentofu.org/",
+    "want": "og"
+  },
+  {
+    "x": 67,
+    "y": 57,
+    "w": 6,
+    "h": 3,
+    "label": "redis.io",
+    "url": "https://redis.io/",
+    "want": "og"
+  },
+  {
+    "x": 67,
+    "y": 59,
+    "w": 6,
+    "h": 2,
+    "label": "valkey.io",
+    "url": "https://valkey.io/",
+    "want": "og"
+  },
+  {
+    "x": 67,
+    "y": 62,
+    "w": 6,
+    "h": 3,
+    "label": "elastic.co",
+    "url": "https://elastic.co/",
+    "want": "og"
+  },
+  {
+    "x": 67,
+    "y": 64,
+    "w": 6,
+    "h": 2,
+    "label": "opensearch.org",
+    "url": "https://opensearch.org/",
+    "want": "og"
+  },
+  {
+    "x": 67,
+    "y": 67,
+    "w": 6,
+    "h": 3,
+    "label": "wordpress.org",
+    "url": "https://wordpress.org/",
+    "want": "og"
+  },
+  {
+    "x": 67,
+    "y": 69,
+    "w": 6,
+    "h": 2,
+    "label": "wpengine.com",
+    "url": "https://wpengine.com/",
+    "want": "og"
+  },
+  {
+    "x": 41,
+    "y": 60,
+    "w": 5,
+    "h": 3,
+    "label": "gnu.org",
+    "url": "https://www.gnu.org/software/emacs/",
+    "want": "og"
+  },
+  {
+    "x": 46,
+    "y": 60,
+    "w": 5,
+    "h": 3,
+    "label": "vim.org",
+    "url": "https://www.vim.org/",
+    "want": "og"
+  },
+  {
+    "x": 46,
+    "y": 62,
+    "w": 5,
+    "h": 2,
+    "label": "neovim.io",
+    "url": "https://neovim.io/",
+    "want": "og"
+  },
+  {
+    "x": 52,
+    "y": 60,
+    "w": 6,
+    "h": 3,
+    "label": "code.visualstudio.com",
+    "url": "https://code.visualstudio.com/",
+    "want": "og"
+  },
+  {
+    "x": 58,
+    "y": 60,
+    "w": 5,
+    "h": 3,
+    "label": "cursor.com",
+    "url": "https://cursor.com/",
+    "want": "og"
+  },
+  {
+    "x": 52,
+    "y": 64,
+    "w": 6,
+    "h": 3,
+    "label": "zed.dev",
+    "url": "https://zed.dev/",
+    "want": "og"
+  },
+  {
+    "x": 58,
+    "y": 64,
+    "w": 5,
+    "h": 3,
+    "label": "jetbrains.com",
+    "url": "https://jetbrains.com/",
+    "want": "og"
+  },
+  {
+    "x": 41,
+    "y": 67,
+    "w": 6,
+    "h": 3,
+    "label": "nodejs.org",
+    "url": "https://nodejs.org/",
+    "want": "og"
+  },
+  {
+    "x": 48,
+    "y": 67,
+    "w": 5,
+    "h": 3,
+    "label": "deno.com",
+    "url": "https://deno.com/",
+    "want": "og"
+  },
+  {
+    "x": 53,
+    "y": 67,
+    "w": 4,
+    "h": 3,
+    "label": "oracle.com",
+    "url": "https://oracle.com/",
+    "want": "og"
+  },
+  {
+    "x": 41,
+    "y": 69,
+    "w": 6,
+    "h": 4,
+    "label": "bun.sh",
+    "url": "https://bun.sh/",
+    "want": "og"
+  },
+  {
+    "x": 41,
+    "y": 74,
+    "w": 5,
+    "h": 2,
+    "label": "npmjs.com",
+    "url": "https://npmjs.com/",
+    "want": "og"
+  },
+  {
+    "x": 46,
+    "y": 74,
+    "w": 5,
+    "h": 2,
+    "label": "yarnpkg.com",
+    "url": "https://yarnpkg.com/",
+    "want": "og"
+  },
+  {
+    "x": 51,
+    "y": 74,
+    "w": 5,
+    "h": 2,
+    "label": "pnpm.io",
+    "url": "https://pnpm.io/",
+    "want": "og"
+  },
+  {
+    "x": 57,
+    "y": 74,
+    "w": 5,
+    "h": 3,
+    "label": "react.dev",
+    "url": "https://react.dev/",
+    "want": "og"
+  },
+  {
+    "x": 62,
+    "y": 74,
+    "w": 5,
+    "h": 3,
+    "label": "vuejs.org",
+    "url": "https://vuejs.org/",
+    "want": "og"
+  },
+  {
+    "x": 62,
+    "y": 70,
+    "w": 5,
+    "h": 3,
+    "label": "svelte.dev",
+    "url": "https://svelte.dev/",
+    "want": "og"
+  },
+  {
+    "x": 57,
+    "y": 70,
+    "w": 5,
+    "h": 3,
+    "label": "angular.dev",
+    "url": "https://angular.dev/",
+    "want": "og"
+  },
+  {
+    "x": 75,
+    "y": 57,
+    "w": 6,
+    "h": 3,
+    "label": "aws.amazon.com",
+    "url": "https://aws.amazon.com/",
+    "want": "og"
+  },
+  {
+    "x": 75,
+    "y": 60,
+    "w": 6,
+    "h": 3,
+    "label": "cloudflare.com",
+    "url": "https://cloudflare.com/",
+    "want": "og"
+  },
+  {
+    "x": 75,
+    "y": 64,
+    "w": 6,
+    "h": 3,
+    "label": "vercel.com",
+    "url": "https://vercel.com/",
+    "want": "og"
+  },
+  {
+    "x": 75,
+    "y": 67,
+    "w": 6,
+    "h": 3,
+    "label": "netlify.com",
+    "url": "https://netlify.com/",
+    "want": "og"
+  },
+  {
+    "x": 75,
+    "y": 52,
+    "w": 6,
+    "h": 3,
+    "label": "x.com",
+    "url": "https://x.com/",
+    "want": "og"
+  },
+  {
+    "x": 81,
+    "y": 52,
+    "w": 5,
+    "h": 3,
+    "label": "bsky.app",
+    "url": "https://bsky.app/",
+    "want": "og"
+  },
+  {
+    "x": 81,
+    "y": 56,
+    "w": 2,
+    "h": 2,
+    "label": "digg.com",
+    "url": "https://digg.com/",
+    "want": "og"
+  },
+  {
+    "x": 83,
+    "y": 56,
+    "w": 4,
+    "h": 3,
+    "label": "reddit.com",
+    "url": "https://reddit.com/",
+    "want": "og"
+  }
+]

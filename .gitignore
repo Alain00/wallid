@@ -6,3 +6,8 @@ dist
 !public/**/*.html
 public/sitemap.xml
 favicon.svg
+
+# Build-time public config. `BUN_PUBLIC_*` is compiled into the client
+# bundle, so nothing secret belongs here — Worker secrets go to
+# `wrangler secret put`. Written by scripts/prod-setup.sh.
+.env

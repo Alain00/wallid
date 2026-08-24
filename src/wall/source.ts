@@ -1,6 +1,7 @@
 import { decodeChunk, type ChunkBody } from "./chunk";
 import { allChunks, chunkKey, type Chunk, type Rect } from "./geometry";
 import type { Quote } from "./pricing";
+import { rasterise, tileEdge } from "./raster";
 
 /**
  * Where the wall comes from.
@@ -39,7 +40,7 @@ export type Source = {
    * the index is fresh, every chunk is held at its current version, and this
    * resolves without touching the network.
    */
-  load(): Promise<boolean>;
+  load(force?: boolean): Promise<boolean>;
   wall(): Wall;
   /**
    * Cells claimed locally, before — and regardless of — the server hearing
@@ -78,10 +79,25 @@ export function createSource(base = "", now: () => number = Date.now): Source {
   let claimed = 0;
   let cents = 0;
 
-  async function readIndex(): Promise<Index | null> {
-    if (index && now() - index.at < INDEX_MS) return index;
+  async function readIndex(force = false): Promise<Index | null> {
+    if (!force && index && now() - index.at < INDEX_MS) return index;
     try {
-      const response = await fetch(`${base}/wall/i`);
+      /*
+       * Three caches sit between a settled claim and the wall, and a forced
+       * read has to get past all of them.
+       *
+       * The first is this TTL. The second is the browser's own HTTP cache,
+       * which honours the `max-age=30` the index is served with — invisible
+       * from here, uninvalidatable, and the one that shows a buyer returning
+       * from Stripe a wall without their purchase on it. The third is the edge,
+       * which is the one worth keeping: it is what stops a page view costing a
+       * D1 read.
+       *
+       * A cache-busting parameter misses all three, which is why it is spent
+       * only on the moment somebody has just paid rather than on every poll.
+       */
+      const url = force ? `${base}/wall/i?t=${Date.now()}` : `${base}/wall/i`;
+      const response = await fetch(url);
       if (!response.ok) return index;
       const body = (await response.json()) as {
         chunks?: Record<string, number>;
@@ -105,8 +121,8 @@ export function createSource(base = "", now: () => number = Date.now): Source {
   }
 
   return {
-    async load() {
-      const current = await readIndex();
+    async load(force = false) {
+      const current = await readIndex(force);
       if (!current) return false;
 
       let changed = false;
@@ -213,6 +229,8 @@ export async function checkout(
     imageSource?: string;
     email?: string | null;
     turnstile: string;
+    /** Issued by the artwork step. See `allowed` in `worker/wall/index.ts`. */
+    pass?: string;
   },
   base = "",
 ): Promise<Checkout> {
@@ -222,8 +240,21 @@ export async function checkout(
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ ...body.rect, ...body, rect: undefined }),
     });
-    const result = (await response.json()) as Record<string, string>;
-    if (!response.ok) return { ok: false, error: result.error ?? "that did not work" };
+    /*
+     * A body that is not JSON is not a network failure.
+     *
+     * When the Worker throws, Cloudflare answers with an HTML error page, and
+     * `response.json()` throws on it — which used to land in the catch below
+     * and tell the buyer the wall was unreachable while it was answering
+     * perfectly well. Read the status instead, and say which end went wrong.
+     */
+    const result = (await response.json().catch(() => null)) as Record<string, string> | null;
+    if (!response.ok || !result) {
+      return {
+        ok: false,
+        error: result?.error ?? (response.status >= 500 ? "the wall is having trouble — nothing was charged" : "that did not work"),
+      };
+    }
     return {
       ok: true,
       url: result.url!,
@@ -239,28 +270,93 @@ export async function checkout(
  * The artwork step, run before checkout so the buyer sees their logo in the
  * cell before they are asked for a card.
  *
- * One call for both ways in: a `File` if they chose one, otherwise the URL they
- * typed, from which the Worker fetches whatever icon their own site declares.
+ * One way in: the URL they typed, from which the Worker fetches whatever icon
+ * or preview image their own site declares. There is no upload — see the panel.
+ *
+ * `want` picks which picture of themselves the buyer gets: the mark their site
+ * declares as its icon, or the preview image it declares for social cards.
+ * Neither is better in general — a preview fills a wide rectangle where an icon
+ * would float in the middle of it, and an icon is the only thing that reads in
+ * a single cell.
+ *
+ * Two calls in one case, and it is invisible from outside: artwork the wall
+ * will not store as it stands — an SVG, or a preview image too large for the
+ * bucket — comes back as bytes rather than a key, and this redraws it at tile
+ * size (see `raster.ts`) and posts the PNG straight back through the same
+ * route. The caller gets a key either way and never learns the difference.
+ *
+ * The `pass` in the answer is what makes the second call legal without a second
+ * challenge — a Turnstile token is redeemed once, and the first call spent it.
  */
+export type Artwork = { key: string; source: string; pass?: string };
+
 export async function resolveArtwork(
-  input: { file?: File | null; url?: string; turnstile: string },
+  input: {
+    url?: string;
+    want?: "favicon" | "og";
+    /** The claim's footprint, which is what decides how many pixels the artwork
+     * is worth storing. A 1x1 wants a favicon's worth; a 6x3 wants far more. */
+    rect: Rect;
+    turnstile: string;
+    pass?: string;
+  },
   base = "",
-): Promise<{ key: string; source: string } | { error: string }> {
-  const form = new FormData();
-  form.set("turnstile", input.turnstile);
-  if (input.file) form.set("file", input.file);
-  else form.set("url", input.url ?? "");
+): Promise<Artwork | { error: string }> {
+  /*
+   * `file` is still a way in here, and it is not the buyer's.
+   *
+   * Nobody can hand this function an image any more — the panel's upload
+   * control is gone and the parameter with it. What remains is the redraw round
+   * trip below: artwork the wall will not store as it stands comes back as
+   * bytes, and the only thing on this side that can turn an SVG into a PNG is
+   * the browser's own canvas, which then has to post the result somewhere. That
+   * somewhere is the same route.
+   */
+  const send = async (body: { file?: File | null; url?: string; pass?: string }) => {
+    const form = new FormData();
+    form.set("turnstile", input.turnstile);
+    if (body.pass) form.set("pass", body.pass);
+    if (body.file) form.set("file", body.file);
+    else {
+      form.set("url", body.url ?? "");
+      if (input.want) form.set("want", input.want);
+    }
+    const response = await fetch(`${base}/wall/artwork`, { method: "POST", body: form });
+    return { ok: response.ok, result: (await response.json()) as Record<string, string> };
+  };
 
   try {
-    const response = await fetch(`${base}/wall/artwork`, { method: "POST", body: form });
-    const result = (await response.json()) as Record<string, string>;
-    return response.ok
-      ? { key: result.key!, source: result.source! }
-      : { error: result.error ?? "could not read that image" };
+    const first = await send({ url: input.url, pass: input.pass });
+    if (!first.ok) return { error: first.result.error ?? "could not read that image" };
+
+    if (first.result.redraw) {
+      const png = await rasterise(
+        fromBase64(first.result.redraw),
+        first.result.type,
+        tileEdge(input.rect),
+      );
+      if (!png) return { error: "this browser could not redraw that image" };
+
+      // The pass, not the token: Cloudflare has already spent the token on the
+      // call that fetched the original.
+      const second = await send({ file: png, pass: first.result.pass });
+      if (!second.ok) return { error: second.result.error ?? "could not read that image" };
+      return {
+        key: second.result.key!,
+        // The buyer asked for their site's icon and got it. That it took a
+        // detour through a canvas is not a distinction the panel should draw.
+        source: first.result.source!,
+        pass: second.result.pass,
+      };
+    }
+
+    return { key: first.result.key!, source: first.result.source!, pass: first.result.pass };
   } catch {
     return { error: "could not reach the wall" };
   }
 }
+
+const fromBase64 = (value: string) => Uint8Array.from(atob(value), c => c.charCodeAt(0));
 
 /** What this browser owns. The durable identity is a cookie; there is no login. */
 export async function mine(base = ""): Promise<unknown[]> {

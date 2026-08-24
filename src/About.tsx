@@ -22,8 +22,8 @@ export function About() {
         .
       </p>
       <p className="text-muted text-lg leading-relaxed">
-        Logos are fetched from the site each claim links to, or uploaded. If yours is on here and
-        should not be, mail the address above and it comes down.
+        Logos are fetched from the site each claim links to — its icon or its preview image, never
+        an upload. If yours is on here and should not be, mail the address above and it comes down.
       </p>
     </Page>
   );

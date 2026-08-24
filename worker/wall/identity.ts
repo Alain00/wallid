@@ -107,3 +107,63 @@ export function sameSecret(a: string, b: string): boolean {
   for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
   return diff === 0;
 }
+
+/**
+ * A short-lived pass, issued once a Turnstile token has been redeemed.
+ *
+ * Turnstile tokens are single-use: Cloudflare's siteverify redeems one and
+ * refuses it ever after with `timeout-or-duplicate`. The buy flow makes more
+ * than one guarded call — resolve the artwork, maybe resolve it again after an
+ * upload, then check out — and every one of those was sending the *same* token.
+ * The first succeeded and the rest were 403s. Invisible in development, because
+ * `.dev.vars` carries Cloudflare's always-passes test secret and it accepts
+ * anything however many times.
+ *
+ * So: solve once, carry a pass. It is an HMAC over an expiry and the address it
+ * was issued to, which means it is verifiable with no storage — there is no
+ * table of live passes to keep, and a Worker in another colo can check one it
+ * never issued.
+ *
+ * Bound to the address for the same reason Turnstile is given `remoteip`: a
+ * pass lifted off one response is otherwise a solved challenge anybody can
+ * spend. Ten minutes, which is a buyer finding their card rather than a session
+ * worth stealing.
+ */
+export const PASS_SECONDS = 600;
+
+const signPass = async (secret: string, expiry: number, address: string) => {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(`${secret}:pass`),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  return hex(await crypto.subtle.sign("HMAC", key, encoder.encode(`${expiry}:${address}`)));
+};
+
+export async function issuePass(secret: string, address: string, nowSeconds: number) {
+  const expiry = nowSeconds + PASS_SECONDS;
+  return `${expiry}.${await signPass(secret, expiry, address)}`;
+}
+
+/** Whether this pass was issued by us, to this address, and has not expired. */
+export async function verifyPass(
+  value: unknown,
+  secret: string,
+  address: string,
+  nowSeconds: number,
+): Promise<boolean> {
+  if (typeof value !== "string" || value.length > 200) return false;
+  const [head, signature] = value.split(".");
+  if (!head || !signature) return false;
+
+  const expiry = Number(head);
+  // Checked before the HMAC, so an expired pass costs a parse rather than a
+  // signature. The comparison is still constant-time below: the expiry is not
+  // the secret, the signature is.
+  if (!Number.isSafeInteger(expiry) || expiry <= nowSeconds) return false;
+  if (expiry > nowSeconds + PASS_SECONDS) return false;
+
+  return sameSecret(signature, await signPass(secret, expiry, address));
+}
